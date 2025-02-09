@@ -6,7 +6,7 @@ This is a Bash script for transcoding and downsampling 24-bit FLAC files to 16-b
 
 - Converts 24-bit FLAC files to 16-bit FLAC using SoX.
 - Downsamples high sample rate files:
-  - 96kHz or 192kHz → 48kHz
+  - 384kHz, 192kHz, or 96kHz → 48kHz
   - 88.2kHz → 44.1kHz
 - Preserves existing 16-bit FLAC files without unnecessary conversion.
 - Copies MP3 files without modification.
@@ -17,7 +17,7 @@ This is a Bash script for transcoding and downsampling 24-bit FLAC files to 16-b
 - **SoX (Sound eXchange)** must be installed. [SoX Project](http://sox.sourceforge.net/)
   - Install on Debian/Ubuntu: `sudo apt install sox`
   - Install on macOS: `brew install sox`
-  - Install on Windows: Use `scoop install sox` or `winget install sox`.
+  - Install on Windows: Use WSL and install depending on the subsystem.
 
 ## Usage
 

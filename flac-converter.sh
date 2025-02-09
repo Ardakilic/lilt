@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Flac to 16bit converter
 # This script converts Hi-Res FLAC files to 16-bit FLAC files with a sample rate of 44.1kHz or 48kHz.
@@ -6,6 +6,7 @@
 # Usage: flac-converter.sh <source_directory> [options]
 # https://github.com/Ardakilic/flac-to-16bit-converter
 # Copyright (C) 2025 Arda Kilicdagi
+# Licensed under MIT License
 
 # Function to display usage
 show_usage() {
@@ -78,7 +79,7 @@ get_audio_info() {
 # Function to create target directory structure
 create_target_dir() {
     local source_file="$1"
-    local rel_path=$(dirname "${source_file#$SOURCE_DIR/}")
+    local rel_path=$(dirname "${source_file#"$SOURCE_DIR"/}")
     local target_dir="$TRANSCODED_DIR/$rel_path"
     mkdir -p "$target_dir"
     echo "$target_dir"
@@ -100,7 +101,7 @@ find "$SOURCE_DIR" \( -name "*.flac" -o -name "*.mp3" \) | while read -r file; d
     fi
     
     # Process FLAC files
-    read bits rate <<< $(get_audio_info "$file")
+    read -r bits rate <<< "$(get_audio_info "$file")"
     
     # Determine if conversion is needed
     needs_conversion=false
@@ -114,7 +115,7 @@ find "$SOURCE_DIR" \( -name "*.flac" -o -name "*.mp3" \) | while read -r file; d
     fi
     
     # Check sample rate
-    if [ "$rate" -eq 96000 ] || [ "$rate" -eq 192000 ]; then
+    if [ "$rate" -eq 96000 ] || [ "$rate" -eq 192000 ] || [ "$rate" -eq 384000 ]; then
         needs_conversion=true
         conversion_args="$conversion_args $rate_args 48000"
     elif [ "$rate" -eq 88200 ]; then
@@ -125,7 +126,7 @@ find "$SOURCE_DIR" \( -name "*.flac" -o -name "*.mp3" \) | while read -r file; d
     # Process file
     if [ "$needs_conversion" = true ]; then
         echo "Converting FLAC: $file"
-        sox --show-progress "$file" $conversion_args "$target_file" dither
+        sox "$file" $conversion_args "$target_file" dither
     else
         echo "Copying FLAC: $file"
         cp "$file" "$target_file"
