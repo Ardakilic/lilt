@@ -8,6 +8,9 @@
 # Copyright (C) 2025 Arda Kilicdagi
 # Licensed under MIT License
 
+# Define the sox command - can be overridden via environment variable
+: "${SOX_COMMAND:=sox}"
+
 # Function to display usage
 show_usage() {
     echo "Usage: $0 <source_directory> [options]"
@@ -53,8 +56,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Check if sox is installed
-if ! command -v sox &> /dev/null; then
-    echo "Error: sox is not installed. Please install sox to continue."
+if ! command -v ${SOX_COMMAND%% *} &> /dev/null; then
+    echo "Error: sox (or Docker) is not installed. Please ensure it is installed to continue."
     exit 1
 fi
 
@@ -70,7 +73,7 @@ mkdir -p "$TRANSCODED_DIR"
 # Function to get audio file info using sox
 get_audio_info() {
     local file="$1"
-    local info=$(sox --i "$file")
+    local info=$($SOX_COMMAND --i "$file")
     local bits=$(echo "$info" | grep "Sample Encoding" | grep -o "[0-9]\+")
     local rate=$(echo "$info" | grep "Sample Rate" | grep -o "[0-9]\+")
     echo "$bits $rate"
@@ -127,9 +130,9 @@ find "$SOURCE_DIR" \( -name "*.flac" -o -name "*.mp3" \) | while read -r file; d
     if [ "$needs_conversion" = true ]; then
         echo "Converting FLAC: $file"
         # Debugging
-        # echo "sox --multi-threaded -G '$file' $bitrate_args '$target_file' $sample_rate_args dither"
+        # echo "$SOX_COMMAND --multi-threaded -G '$file' $bitrate_args '$target_file' $sample_rate_args dither"
         # shellcheck disable=SC2086
-        sox --multi-threaded -G "$file" $bitrate_args "$target_file" $sample_rate_args dither
+        $SOX_COMMAND --multi-threaded -G "$file" $bitrate_args "$target_file" $sample_rate_args dither
     else
         echo "Copying FLAC: $file"
         cp "$file" "$target_file"
