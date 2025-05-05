@@ -117,15 +117,21 @@ get_audio_info() {
     local info
     
     if [ "$USE_DOCKER" = true ]; then
-        info=$("${SOX_DOCKER[@]}" --i "$docker_file")
+        info=$("${SOX_DOCKER[@]}" --i "$docker_file" 2>/dev/null)
     else
-        info=$("$SOX_COMMAND" --i "$file")
+        info=$("$SOX_COMMAND" --i "$file" 2>/dev/null)
+    fi
+    
+    # Check if info was successfully retrieved
+    if [ -z "$info" ]; then
+        echo "0 0"  # Return default values if info retrieval failed
+        return 1
     fi
     
     local bits
     local rate
-    bits=$(echo "$info" | grep "Sample Encoding" | grep -o "[0-9]\+")
-    rate=$(echo "$info" | grep "Sample Rate" | grep -o "[0-9]\+")
+    bits=$(echo "$info" | grep "Sample Encoding" | grep -o "[0-9]\+" || echo "0")
+    rate=$(echo "$info" | grep "Sample Rate" | grep -o "[0-9]\+" || echo "0")
     echo "$bits $rate"
 }
 
@@ -143,6 +149,10 @@ create_target_dir() {
 get_docker_path() {
     local host_path="$1"
     local rel_path="${host_path#"$SOURCE_DIR"}"
+    # Ensure we have a leading slash for the relative path
+    if [[ "$rel_path" != /* ]]; then
+        rel_path="/$rel_path"
+    fi
     echo "$SOURCE_DIR_DOCKER$rel_path"
 }
 
@@ -150,6 +160,10 @@ get_docker_path() {
 get_docker_target_path() {
     local host_path="$1"
     local rel_path="${host_path#"$TRANSCODED_DIR"}"
+    # Ensure we have a leading slash for the relative path
+    if [[ "$rel_path" != /* ]]; then
+        rel_path="/$rel_path"
+    fi
     echo "$TRANSCODED_DIR_DOCKER$rel_path"
 }
 
@@ -165,6 +179,7 @@ find "$SOURCE_DIR" \( -name "*.flac" -o -name "*.mp3" \) | while read -r file; d
     if [ "$USE_DOCKER" = true ]; then
         docker_file=$(get_docker_path "$file")
         docker_target=$(get_docker_target_path "$target_file")
+        echo "Docker path: $docker_file"
     else
         docker_file="$file"
         docker_target="$target_file"
@@ -179,23 +194,24 @@ find "$SOURCE_DIR" \( -name "*.flac" -o -name "*.mp3" \) | while read -r file; d
     
     # Process FLAC files
     read -r bits rate <<< "$(get_audio_info "$file" "$docker_file")"
+    echo "Detected: $bits bits, $rate Hz"
 
     # Determine if conversion is needed
     needs_conversion=false
     bitrate_args=""                             # Base bitrate conversion arguments
     sample_rate_args="rate -v -L"               # Base rate conversion arguments
 
-    # Check bit depth
-    if [ "$bits" -gt 16 ]; then
+    # Check bit depth (with fallback for empty values)
+    if [ -n "$bits" ] && [ "$bits" -gt 16 ]; then
         needs_conversion=true
         bitrate_args="-b 16"
     fi
 
-    # Check sample rate
-    if [ "$rate" -eq 96000 ] || [ "$rate" -eq 192000 ] || [ "$rate" -eq 384000 ]; then
+    # Check sample rate (with fallback for empty values)
+    if [ -n "$rate" ] && { [ "$rate" -eq 96000 ] || [ "$rate" -eq 192000 ] || [ "$rate" -eq 384000 ]; }; then
         needs_conversion=true
         sample_rate_args="$sample_rate_args 48000"
-    elif [ "$rate" -eq 88200 ]; then
+    elif [ -n "$rate" ] && [ "$rate" -eq 88200 ]; then
         needs_conversion=true
         sample_rate_args="$sample_rate_args 44100"
     fi
@@ -204,13 +220,27 @@ find "$SOURCE_DIR" \( -name "*.flac" -o -name "*.mp3" \) | while read -r file; d
     if [ "$needs_conversion" = true ]; then
         echo "Converting FLAC: $file"
         if [ "$USE_DOCKER" = true ]; then
-            # Use the Docker array for conversion
-            # shellcheck disable=SC2086
-            "${SOX_DOCKER[@]}" --multi-threaded -G "$docker_file" $bitrate_args "$docker_target" $sample_rate_args dither
+            # Split the args into arrays for proper handling
+            # shellcheck disable=SC2206
+            IFS=' ' read -ra BITRATE_ARGS_ARRAY <<< "$bitrate_args"
+            # shellcheck disable=SC2206
+            IFS=' ' read -ra SAMPLE_RATE_ARGS_ARRAY <<< "$sample_rate_args"
+            
+            # Use the Docker array for conversion with properly split arguments
+            echo "Running: docker command with $docker_file to $docker_target"
+            "${SOX_DOCKER[@]}" --multi-threaded -G "$docker_file" "${BITRATE_ARGS_ARRAY[@]}" "$docker_target" "${SAMPLE_RATE_ARGS_ARRAY[@]}" dither
+            if [ $? -ne 0 ]; then
+                echo "Error: Sox conversion failed. Copying original file instead."
+                cp "$file" "$target_file"
+            fi
         else
             # Use local sox command
             # shellcheck disable=SC2086
             "$SOX_COMMAND" --multi-threaded -G "$file" $bitrate_args "$target_file" $sample_rate_args dither
+            if [ $? -ne 0 ]; then
+                echo "Error: Sox conversion failed. Copying original file instead."
+                cp "$file" "$target_file"
+            fi
         fi
     else
         echo "Copying FLAC: $file"
