@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 
 # Flac to 16bit converter
-# This script converts Hi-Res FLAC files to 16-bit FLAC files with a sample rate of 44.1kHz or 48kHz.
-# It also copies MP3 files and image files (JPG, PNG) to the target directory.
+# This script converts Hi-Res FLAC files to 16-bit FLAC files with a sample rate of 44.1kHz or 48kHz.
+# It also copies MP3 files and image files (JPG, PNG) to the target directory.
 # Usage: flac-converter.sh <source_directory> [options]
 # https://github.com/Ardakilic/flac-to-16bit-converter
 # Copyright (C) 2025 Arda Kilicdagi
 # Licensed under MIT License
 
-# Define the sox command - can be overridden via environment variable
-: "${SOX_COMMAND:=sox}"
+# Default values
+USE_DOCKER=false
+DOCKER_IMAGE="ardakilic/sox_ng:latest"
+SOX_COMMAND="sox"
 
 # Function to display usage
 show_usage() {
@@ -17,6 +19,8 @@ show_usage() {
     echo "Options:"
     echo "  --target-dir <dir>   Specify target directory (default: ./transcoded)"
     echo "  --copy-images        Copy JPG and PNG files"
+    echo "  --use-docker         Use Docker to run Sox instead of local installation"
+    echo "  --docker-image <img> Specify Docker image (default: ardakilic/sox_ng:latest)"
     exit 1
 }
 
@@ -48,6 +52,19 @@ while [[ $# -gt 0 ]]; do
             COPY_IMAGES=true
             shift
             ;;
+        --use-docker)
+            USE_DOCKER=true
+            shift
+            ;;
+        --docker-image)
+            if [[ -n $2 ]]; then
+                DOCKER_IMAGE="$2"
+                shift 2
+            else
+                echo "Error: --docker-image requires an image name"
+                exit 1
+            fi
+            ;;
         *)
             echo "Unknown option: $1"
             show_usage
@@ -55,10 +72,27 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Check if sox is installed
-if ! command -v ${SOX_COMMAND%% *} &> /dev/null; then
-    echo "Error: sox (or Docker) is not installed. Please ensure it is installed to continue."
-    exit 1
+# Setup the appropriate SOX command
+if [ "$USE_DOCKER" = true ]; then
+    # Check if docker is installed
+    if ! command -v docker &> /dev/null; then
+        echo "Error: Docker is not installed. Please install Docker to use this option."
+        exit 1
+    fi
+    # Override SOX_COMMAND to use Docker
+    SOX_COMMAND="docker run --rm -v \"$(cd "$(dirname "$SOURCE_DIR")"; pwd -P)\":/source -v \"$(cd "$(dirname "$TRANSCODED_DIR")"; pwd -P)\":/target $DOCKER_IMAGE"
+    # Convert paths to Docker container paths
+    SOURCE_DIR_DOCKER="/source/$(basename "$SOURCE_DIR")"
+    TRANSCODED_DIR_DOCKER="/target/$(basename "$TRANSCODED_DIR")"
+else
+    # Check if sox is installed locally
+    if ! command -v $SOX_COMMAND &> /dev/null; then
+        echo "Error: sox is not installed. Please install sox or use --use-docker option."
+        exit 1
+    fi
+    # Use local paths
+    SOURCE_DIR_DOCKER="$SOURCE_DIR"
+    TRANSCODED_DIR_DOCKER="$TRANSCODED_DIR"
 fi
 
 # Check if source directory exists
@@ -73,7 +107,14 @@ mkdir -p "$TRANSCODED_DIR"
 # Function to get audio file info using sox
 get_audio_info() {
     local file="$1"
-    local info=$($SOX_COMMAND --i "$file")
+    local docker_file="$2"
+    
+    if [ "$USE_DOCKER" = true ]; then
+        local info=$(eval "$SOX_COMMAND --i \"$docker_file\"")
+    else
+        local info=$($SOX_COMMAND --i "$file")
+    fi
+    
     local bits=$(echo "$info" | grep "Sample Encoding" | grep -o "[0-9]\+")
     local rate=$(echo "$info" | grep "Sample Rate" | grep -o "[0-9]\+")
     echo "$bits $rate"
@@ -88,6 +129,20 @@ create_target_dir() {
     echo "$target_dir"
 }
 
+# Function to get Docker path
+get_docker_path() {
+    local host_path="$1"
+    local rel_path="${host_path#"$SOURCE_DIR"}"
+    echo "$SOURCE_DIR_DOCKER$rel_path"
+}
+
+# Function to get Docker target path
+get_docker_target_path() {
+    local host_path="$1"
+    local rel_path="${host_path#"$TRANSCODED_DIR"}"
+    echo "$TRANSCODED_DIR_DOCKER$rel_path"
+}
+
 # Process audio files
 find "$SOURCE_DIR" \( -name "*.flac" -o -name "*.mp3" \) | while read -r file; do
     echo "Processing: $file"
@@ -95,6 +150,15 @@ find "$SOURCE_DIR" \( -name "*.flac" -o -name "*.mp3" \) | while read -r file; d
     # Get target directory
     target_dir=$(create_target_dir "$file")
     target_file="$target_dir/$(basename "$file")"
+    
+    # Get Docker paths if needed
+    if [ "$USE_DOCKER" = true ]; then
+        docker_file=$(get_docker_path "$file")
+        docker_target=$(get_docker_target_path "$target_file")
+    else
+        docker_file="$file"
+        docker_target="$target_file"
+    fi
 
     # Check if it's an MP3 file
     if [[ "$file" == *.mp3 ]]; then
@@ -104,7 +168,7 @@ find "$SOURCE_DIR" \( -name "*.flac" -o -name "*.mp3" \) | while read -r file; d
     fi
     
     # Process FLAC files
-    read -r bits rate <<< "$(get_audio_info "$file")"
+    read -r bits rate <<< "$(get_audio_info "$file" "$docker_file")"
 
     # Determine if conversion is needed
     needs_conversion=false
@@ -129,10 +193,15 @@ find "$SOURCE_DIR" \( -name "*.flac" -o -name "*.mp3" \) | while read -r file; d
     # Process file
     if [ "$needs_conversion" = true ]; then
         echo "Converting FLAC: $file"
-        # Debugging
-        # echo "$SOX_COMMAND --multi-threaded -G '$file' $bitrate_args '$target_file' $sample_rate_args dither"
-        # shellcheck disable=SC2086
-        $SOX_COMMAND --multi-threaded -G "$file" $bitrate_args "$target_file" $sample_rate_args dither
+        if [ "$USE_DOCKER" = true ]; then
+            # Construct and execute the docker command
+            docker_cmd="$SOX_COMMAND --multi-threaded -G \"$docker_file\" $bitrate_args \"$docker_target\" $sample_rate_args dither"
+            eval "$docker_cmd"
+        else
+            # Use local sox command
+            # shellcheck disable=SC2086
+            $SOX_COMMAND --multi-threaded -G "$file" $bitrate_args "$target_file" $sample_rate_args dither
+        fi
     else
         echo "Copying FLAC: $file"
         cp "$file" "$target_file"

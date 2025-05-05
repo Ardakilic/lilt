@@ -1,6 +1,7 @@
 # FLAC to 16-bit Converter
 
-This is a Bash script for transcoding and downsampling 24-bit FLAC files to 16-bit FLAC using SoX. The script is compatible with Linux, Windows (via WSL or Git Bash), and macOS.
+This script converts Hi-Res FLAC files to 16-bit FLAC files with a sample rate of 44.1kHz or 48kHz.
+It also copies MP3 files and image files (JPG, PNG) to the target directory if requested.
 
 ## Features
 
@@ -14,19 +15,21 @@ This is a Bash script for transcoding and downsampling 24-bit FLAC files to 16-b
 
 ## Requirements
 
-- **SoX (Sound eXchange)** must be installed. [SoX Project](http://sox.sourceforge.net/)
-  - Install on Debian/Ubuntu: `sudo apt install sox`
-  - Install on macOS: `brew install sox`
-  - Install on Windows: Use WSL and install depending on the subsystem.
+You can use this script in one of two ways:
 
-You can also use alternative SoX implementations:
-- Docker image: `bigpapoo/sox`
-- SoX-NG: A drop-in replacement for SoX ([SoX-NG Project](https://codeberg.org/sox_ng/sox_ng/))
-- My Docker image for SoX-NG: `ardakilic/sox_ng`. Source code of the Image is [here](https://github.com/Ardakilic/sox_ng_dockerized).
+1. **Using Docker (recommended)**:
+   - Docker must be installed on your system
+   - No local SoX installation required
+   - Uses `ardakilic/sox_ng:latest` by default
+
+2. **Using Local SoX Installation**:
+   - **SoX (Sound eXchange)** must be installed. [SoX Project](http://sox.sourceforge.net/)
+     - Install on Debian/Ubuntu: `sudo apt install sox`
+     - Install on macOS: `brew install sox`
+     - Install on Windows: Use WSL and install depending on the subsystem.
+   - You can also use SoX-NG: A drop-in replacement for SoX ([SoX-NG Project](https://codeberg.org/sox_ng/sox_ng/))
 
 ## Usage
-
-Run the script with the source directory as an argument:
 
 ```bash
 ./flac-converter.sh <source_directory> [options]
@@ -34,40 +37,43 @@ Run the script with the source directory as an argument:
 
 ### Options:
 
-- `--target-dir <dir>` : Specify the target directory (default: `./transcoded`).
-- `--copy-images` : Copy JPG and PNG image files.
-
-### Environment Variables:
-
-- `SOX_COMMAND`: Override the default `sox` command (default: "sox")
-
-### Example Usage
-
-Convert FLAC files from `Music/HiRes` and store the transcoded files in `Music/Converted`:
-
-```bash
-./flac-converter.sh Music/HiRes --target-dir Music/Converted
+```
+--target-dir <dir>   Specify target directory (default: ./transcoded)
+--copy-images        Copy JPG and PNG files
+--use-docker         Use Docker to run Sox instead of local installation
+--docker-image <img> Specify Docker image (default: ardakilic/sox_ng:latest)
 ```
 
-Convert FLAC files and copy images:
+### Examples:
 
+Using local sox installation:
 ```bash
-./flac-converter.sh Music/HiRes --copy-images
+./flac-converter.sh ~/Music/MyAlbum --target-dir ~/Music/MyAlbum-16bit --copy-images
 ```
 
-Using with Docker:
-
+Using Docker:
 ```bash
-SOX_COMMAND="docker run -v $(pwd):/work --rm bigpapoo/sox mysox" ./flac-converter.sh Music/HiRes
-# or my builds of sox_ng, which is better maintained and up-to-date
-SOX_COMMAND="docker run --rm -v $(pwd):/audio ardakilic/sox_ng" ./flac-converter.sh Music/HiRes
+./flac-converter.sh ~/Music/MyAlbum --target-dir ~/Music/MyAlbum-16bit --use-docker
 ```
 
-Using with SoX-NG directly:
+## Docker Support
 
+When using the `--use-docker` option:
+
+- Docker must be installed on your system
+- The script mounts your source and target directories as volumes in the container
+- No local SoX installation is required
+- Uses `ardakilic/sox_ng:latest` by default, which is a containerized version of SoX-NG
+- Source code of the Docker image is available [here](https://github.com/Ardakilic/sox_ng_dockerized)
+
+You can specify a different Docker image with the `--docker-image` option:
 ```bash
-SOX_COMMAND="sox_ng" ./flac-converter.sh Music/HiRes
+./flac-converter.sh ~/Music/MyAlbum --use-docker --docker-image your/sox-image:tag
 ```
+
+Alternative Docker images you can use:
+- `bigpapoo/sox`: Another SoX Docker image
+- Any image that provides SoX installed as the `sox` command
 
 ## How It Works
 
@@ -80,7 +86,7 @@ SOX_COMMAND="sox_ng" ./flac-converter.sh Music/HiRes
 
 ## Notes
 
-- The script uses SoX’s `--multi-threaded` option for performance.
+- The script uses SoX's `--multi-threaded` option for performance.
 - The `-G` flag ensures proper gain handling.
 - Uses `dither` when downsampling to 16-bit for better quality.
 - Creates the same folder structure in the target directory.
