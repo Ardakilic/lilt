@@ -79,14 +79,20 @@ if [ "$USE_DOCKER" = true ]; then
         echo "Error: Docker is not installed. Please install Docker to use this option."
         exit 1
     fi
-    # Override SOX_COMMAND to use Docker
-    SOX_COMMAND="docker run --rm -v \"$(cd "$(dirname "$SOURCE_DIR")"; pwd -P)\":/source -v \"$(cd "$(dirname "$TRANSCODED_DIR")"; pwd -P)\":/target $DOCKER_IMAGE"
+    
+    # Get absolute paths for mounting
+    SOURCE_DIR_ABS=$(cd "$(dirname "$SOURCE_DIR")" || exit 1; pwd -P)/$(basename "$SOURCE_DIR")
+    TRANSCODED_DIR_ABS=$(cd "$(dirname "$TRANSCODED_DIR")" || exit 1; pwd -P)/$(basename "$TRANSCODED_DIR")
+    
+    # Setup Docker related variables
+    declare -a SOX_DOCKER=(docker run --rm -v "$SOURCE_DIR_ABS:/source" -v "$TRANSCODED_DIR_ABS:/target" "$DOCKER_IMAGE")
+    
     # Convert paths to Docker container paths
-    SOURCE_DIR_DOCKER="/source/$(basename "$SOURCE_DIR")"
-    TRANSCODED_DIR_DOCKER="/target/$(basename "$TRANSCODED_DIR")"
+    SOURCE_DIR_DOCKER="/source"
+    TRANSCODED_DIR_DOCKER="/target"
 else
     # Check if sox is installed locally
-    if ! command -v $SOX_COMMAND &> /dev/null; then
+    if ! command -v "$SOX_COMMAND" &> /dev/null; then
         echo "Error: sox is not installed. Please install sox or use --use-docker option."
         exit 1
     fi
@@ -108,22 +114,26 @@ mkdir -p "$TRANSCODED_DIR"
 get_audio_info() {
     local file="$1"
     local docker_file="$2"
+    local info
     
     if [ "$USE_DOCKER" = true ]; then
-        local info=$(eval "$SOX_COMMAND --i \"$docker_file\"")
+        info=$("${SOX_DOCKER[@]}" --i "$docker_file")
     else
-        local info=$($SOX_COMMAND --i "$file")
+        info=$("$SOX_COMMAND" --i "$file")
     fi
     
-    local bits=$(echo "$info" | grep "Sample Encoding" | grep -o "[0-9]\+")
-    local rate=$(echo "$info" | grep "Sample Rate" | grep -o "[0-9]\+")
+    local bits
+    local rate
+    bits=$(echo "$info" | grep "Sample Encoding" | grep -o "[0-9]\+")
+    rate=$(echo "$info" | grep "Sample Rate" | grep -o "[0-9]\+")
     echo "$bits $rate"
 }
 
 # Function to create target directory structure
 create_target_dir() {
     local source_file="$1"
-    local rel_path=$(dirname "${source_file#"$SOURCE_DIR"/}")
+    local rel_path
+    rel_path=$(dirname "${source_file#"$SOURCE_DIR"/}")
     local target_dir="$TRANSCODED_DIR/$rel_path"
     mkdir -p "$target_dir"
     echo "$target_dir"
@@ -194,13 +204,12 @@ find "$SOURCE_DIR" \( -name "*.flac" -o -name "*.mp3" \) | while read -r file; d
     if [ "$needs_conversion" = true ]; then
         echo "Converting FLAC: $file"
         if [ "$USE_DOCKER" = true ]; then
-            # Construct and execute the docker command
-            docker_cmd="$SOX_COMMAND --multi-threaded -G \"$docker_file\" $bitrate_args \"$docker_target\" $sample_rate_args dither"
-            eval "$docker_cmd"
+            # Use the Docker array for conversion
+            "${SOX_DOCKER[@]}" --multi-threaded -G "$docker_file" $bitrate_args "$docker_target" $sample_rate_args dither
         else
             # Use local sox command
             # shellcheck disable=SC2086
-            $SOX_COMMAND --multi-threaded -G "$file" $bitrate_args "$target_file" $sample_rate_args dither
+            "$SOX_COMMAND" --multi-threaded -G "$file" $bitrate_args "$target_file" $sample_rate_args dither
         fi
     else
         echo "Copying FLAC: $file"
