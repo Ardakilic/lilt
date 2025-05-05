@@ -205,6 +205,7 @@ find "$SOURCE_DIR" \( -name "*.flac" -o -name "*.mp3" \) | while read -r file; d
         echo "Converting FLAC: $file"
         if [ "$USE_DOCKER" = true ]; then
             # Use the Docker array for conversion
+            # shellcheck disable=SC2086
             "${SOX_DOCKER[@]}" --multi-threaded -G "$docker_file" $bitrate_args "$docker_target" $sample_rate_args dither
         else
             # Use local sox command
