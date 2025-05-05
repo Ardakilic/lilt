@@ -228,16 +228,14 @@ find "$SOURCE_DIR" \( -name "*.flac" -o -name "*.mp3" \) | while read -r file; d
             
             # Use the Docker array for conversion with properly split arguments
             echo "Running: docker command with $docker_file to $docker_target"
-            "${SOX_DOCKER[@]}" --multi-threaded -G "$docker_file" "${BITRATE_ARGS_ARRAY[@]}" "$docker_target" "${SAMPLE_RATE_ARGS_ARRAY[@]}" dither
-            if [ $? -ne 0 ]; then
+            if ! "${SOX_DOCKER[@]}" --multi-threaded -G "$docker_file" "${BITRATE_ARGS_ARRAY[@]}" "$docker_target" "${SAMPLE_RATE_ARGS_ARRAY[@]}" dither; then
                 echo "Error: Sox conversion failed. Copying original file instead."
                 cp "$file" "$target_file"
             fi
         else
             # Use local sox command
             # shellcheck disable=SC2086
-            "$SOX_COMMAND" --multi-threaded -G "$file" $bitrate_args "$target_file" $sample_rate_args dither
-            if [ $? -ne 0 ]; then
+            if ! "$SOX_COMMAND" --multi-threaded -G "$file" $bitrate_args "$target_file" $sample_rate_args dither; then
                 echo "Error: Sox conversion failed. Copying original file instead."
                 cp "$file" "$target_file"
             fi
