@@ -1,0 +1,128 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24.5'
+
+    - name: Get dependencies
+      run: go mod download
+
+    - name: Run tests
+      run: go test -v ./...
+
+    - name: Build all platforms
+      run: |
+        mkdir -p dist
+        
+        # Build for all platforms
+        platforms=(
+          "linux/amd64"
+          "linux/arm64"
+          "linux/386"
+          "linux/arm"
+          "windows/amd64"
+          "windows/arm64"
+          "windows/386"
+          "darwin/amd64"
+          "darwin/arm64"
+        )
+        
+        for platform in "${platforms[@]}"; do
+          GOOS=${platform%/*}
+          GOARCH=${platform#*/}
+          
+          output_name="flac-converter-${GOOS}-${GOARCH}"
+          if [ "$GOOS" = "windows" ]; then
+            output_name="${output_name}.exe"
+          fi
+          
+          echo "Building for $GOOS/$GOARCH..."
+          env GOOS=$GOOS GOARCH=$GOARCH go build \
+            -ldflags="-s -w -X main.version=${GITHUB_REF#refs/tags/}" \
+            -o "dist/${output_name}" .
+        done
+
+    - name: Create archives
+      run: |
+        cd dist
+        
+        # Create tar.gz for Unix-like systems
+        for file in flac-converter-linux-* flac-converter-darwin-*; do
+          if [ -f "$file" ]; then
+            tar -czf "${file}.tar.gz" "$file"
+            rm "$file"
+          fi
+        done
+        
+        # Create zip for Windows
+        for file in flac-converter-windows-*.exe; do
+          if [ -f "$file" ]; then
+            zip "${file%.exe}.zip" "$file"
+            rm "$file"
+          fi
+        done
+
+    - name: Generate release notes
+      id: release_notes
+      run: |
+        cat > release_notes.md << 'EOF'
+        ## Release ${{ github.ref_name }}
+        
+        ### Downloads
+        
+        Choose the appropriate binary for your system:
+        
+        **Windows:**
+        - `flac-converter-windows-amd64.zip` - 64-bit Windows
+        - `flac-converter-windows-arm64.zip` - ARM64 Windows
+        - `flac-converter-windows-386.zip` - 32-bit Windows
+        
+        **macOS:**
+        - `flac-converter-darwin-amd64.tar.gz` - Intel Mac
+        - `flac-converter-darwin-arm64.tar.gz` - Apple Silicon Mac
+        
+        **Linux:**
+        - `flac-converter-linux-amd64.tar.gz` - 64-bit Linux
+        - `flac-converter-linux-arm64.tar.gz` - ARM64 Linux
+        - `flac-converter-linux-386.tar.gz` - 32-bit Linux
+        - `flac-converter-linux-arm.tar.gz` - ARM Linux
+        
+        ### Installation
+        
+        1. Download the appropriate archive for your system
+        2. Extract the binary
+        3. Place it in your PATH or run directly
+        
+        ### Usage
+        
+        ```bash
+        flac-converter <source_directory> [options]
+        ```
+        
+        For help: `flac-converter --help`
+        EOF
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        name: Release ${{ github.ref_name }}
+        body_path: release_notes.md
+        files: dist/*
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
