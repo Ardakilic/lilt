@@ -2,7 +2,7 @@ name: Build and Release
 
 on:
   push:
-    branches: [ main, feat/golang ]
+    branches: [ main]
   pull_request:
     branches: [ main ]
   workflow_dispatch:
@@ -80,7 +80,7 @@ jobs:
     name: Create Release
     runs-on: ubuntu-latest
     needs: [build]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feat/golang')
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main')
     
     steps:
     - uses: actions/checkout@v4
