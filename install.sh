@@ -80,7 +80,7 @@ install_binary() {
     # Create temporary directory
     local tmp_dir
     tmp_dir=$(mktemp -d)
-    trap "rm -rf ${tmp_dir}" EXIT
+    trap 'rm -rf "${tmp_dir}"' EXIT
     
     # Download and extract
     if ! curl -sL "${url}" | tar -xz -C "${tmp_dir}"; then
