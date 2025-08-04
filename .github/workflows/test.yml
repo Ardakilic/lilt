@@ -1,0 +1,35 @@
+name: Test
+
+on:
+  push:
+    branches: [ main, feat/golang ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24.5'
+
+    - name: Get dependencies
+      run: go mod download
+
+    - name: Run tests
+      run: go test -v ./...
+
+    - name: Test build
+      run: go build -o flac-converter .
+
+    - name: Test help command
+      run: ./flac-converter --help
+
+    - name: Test version command
+      run: ./flac-converter --version
