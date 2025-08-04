@@ -92,9 +92,10 @@ jobs:
     - name: Prepare release assets
       run: |
         mkdir -p release
-        find artifacts -name "*.tar.gz" -o -name "*.zip" -o -name "flac-converter*" | while read file; do
-          cp "$file" release/
-        done
+        # Copy archives (tar.gz and zip files) from all artifact directories
+        find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} release/ \;
+        # Copy any standalone binaries that weren't archived
+        find artifacts -type f -name "flac-converter*" ! -name "*.tar.gz" ! -name "*.zip" -exec cp {} release/ \;
         ls -la release/
         
     - name: Create Release
