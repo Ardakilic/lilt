@@ -1,7 +1,10 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestParseAudioInfo(t *testing.T) {
@@ -113,5 +116,74 @@ func TestDetermineConversion(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestCopyFile(t *testing.T) {
+	// Create a temporary directory for testing
+	tmpDir, err := os.MkdirTemp("", "flac-converter-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create a source file with specific content and permissions
+	srcPath := filepath.Join(tmpDir, "source.txt")
+	srcContent := "Hello, World!\nThis is a test file."
+
+	if err := os.WriteFile(srcPath, []byte(srcContent), 0644); err != nil {
+		t.Fatalf("Failed to create source file: %v", err)
+	}
+
+	// Set specific modification time
+	modTime := time.Date(2023, 1, 1, 12, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(srcPath, modTime, modTime); err != nil {
+		t.Fatalf("Failed to set source file time: %v", err)
+	}
+
+	// Copy the file
+	dstPath := filepath.Join(tmpDir, "destination.txt")
+	if err := copyFile(srcPath, dstPath); err != nil {
+		t.Fatalf("Failed to copy file: %v", err)
+	}
+
+	// Verify destination file exists
+	if _, err := os.Stat(dstPath); os.IsNotExist(err) {
+		t.Fatal("Destination file does not exist")
+	}
+
+	// Verify content is identical
+	dstContent, err := os.ReadFile(dstPath)
+	if err != nil {
+		t.Fatalf("Failed to read destination file: %v", err)
+	}
+
+	if string(dstContent) != srcContent {
+		t.Errorf("Content mismatch:\nExpected: %q\nGot: %q", srcContent, string(dstContent))
+	}
+
+	// Verify permissions are preserved
+	srcInfo, err := os.Stat(srcPath)
+	if err != nil {
+		t.Fatalf("Failed to stat source file: %v", err)
+	}
+
+	dstInfo, err := os.Stat(dstPath)
+	if err != nil {
+		t.Fatalf("Failed to stat destination file: %v", err)
+	}
+
+	if srcInfo.Mode() != dstInfo.Mode() {
+		t.Errorf("Permissions not preserved:\nExpected: %v\nGot: %v", srcInfo.Mode(), dstInfo.Mode())
+	}
+
+	// Verify modification time is preserved (within reasonable tolerance)
+	timeDiff := srcInfo.ModTime().Sub(dstInfo.ModTime())
+	if timeDiff < 0 {
+		timeDiff = -timeDiff
+	}
+	if timeDiff > time.Second {
+		t.Errorf("Modification time not preserved:\nExpected: %v\nGot: %v\nDifference: %v",
+			srcInfo.ModTime(), dstInfo.ModTime(), timeDiff)
 	}
 }
