@@ -1,0 +1,103 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.24.5'
+
+    - name: Get dependencies
+      run: go mod download
+
+    - name: Run tests
+      run: go test -v ./...
+
+    - name: Build all platforms
+      run: |
+        mkdir -p dist
+        
+        # Build for all platforms
+        platforms=(
+          "linux/amd64"
+          "linux/arm64"
+          "linux/386"
+          "linux/arm"
+          "windows/amd64"
+          "windows/arm64"
+          "windows/386"
+          "darwin/amd64"
+          "darwin/arm64"
+        )
+        
+        for platform in "${platforms[@]}"; do
+          GOOS=${platform%/*}
+          GOARCH=${platform#*/}
+          
+          output_name="flac-converter-${GOOS}-${GOARCH}"
+          if [ "$GOOS" = "windows" ]; then
+            output_name="${output_name}.exe"
+          fi
+          
+          echo "Building for $GOOS/$GOARCH..."
+          env GOOS=$GOOS GOARCH=$GOARCH go build \
+            -ldflags="-s -w -X main.version=${GITHUB_REF#refs/tags/}" \
+            -o "dist/${output_name}" .
+        done
+
+    - name: Create archives
+      run: |
+        cd dist
+        
+        # Create tar.gz for Unix-like systems
+        for file in flac-converter-linux-* flac-converter-darwin-*; do
+          if [ -f "$file" ]; then
+            tar -czf "${file}.tar.gz" "$file"
+            rm "$file"
+          fi
+        done
+        
+        # Create zip for Windows
+        for file in flac-converter-windows-*.exe; do
+          if [ -f "$file" ]; then
+            zip "${file%.exe}.zip" "$file"
+            rm "$file"
+          fi
+        done
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        name: Release ${{ github.ref_name }}
+        body: |
+          ## FLAC to 16-bit Converter ${{ github.ref_name }}
+          
+          Cross-platform FLAC to 16-bit audio converter.
+          
+          Download the appropriate binary for your system from the assets below.
+          
+          ### Quick Install (Unix-like systems)
+          ```bash
+          curl -sSL https://raw.githubusercontent.com/Ardakilic/flac-to-16bit-converter/main/install.sh | bash
+          ```
+        files: dist/*
+        draft: false
+        prerelease: false
+        make_latest: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
