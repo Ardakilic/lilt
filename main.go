@@ -572,7 +572,7 @@ func selfUpdate(client *http.Client) error {
 			defer r.Close()
 
 			for _, f := range r.File {
-				if f.Name == filename[:len(filename)-4] { // Remove .zip
+				if f.Name == strings.TrimSuffix(filename, ".zip") { // Remove .zip
 					rc, err := f.Open()
 					if err != nil {
 						continue
