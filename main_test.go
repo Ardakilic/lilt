@@ -18,28 +18,54 @@ import (
 	"time"
 )
 
-// GitHub API Mocking Note:
-//
-// Due to the selfUpdate() function having hardcoded URLs, full HTTP mocking is challenging.
-// Some tests make real HTTP calls to the GitHub API for integration testing purposes.
-//
-// This approach has both advantages and disadvantages:
-//
-// Advantages:
-// - Tests real network conditions and API responses
-// - Verifies error handling with actual HTTP status codes
-// - Ensures compatibility with the real GitHub API
-//
-// Disadvantages:
-// - Tests may fail due to network issues or API rate limiting
-// - Tests depend on external service availability
-// - Cannot test specific error scenarios reliably
-//
-// For production code, consider refactoring selfUpdate() to accept an HTTP client
-// or base URL parameter to enable proper mocking in tests.
-//
-// Current approach: Use real API calls for integration testing while ensuring
-// tests are resilient to network failures and provide meaningful feedback.
+// MockTransport is a simple mock for http.RoundTripper to simulate API responses
+type mockTransport struct {
+	responses map[string]*http.Response
+	err       error // If set, return this error for all requests
+}
+
+func (m *mockTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	resp, ok := m.responses[req.URL.String()]
+	if !ok {
+		resp = &http.Response{
+			StatusCode: http.StatusNotFound,
+			Body:       io.NopCloser(bytes.NewBuffer([]byte("Not Found"))),
+			Header:     make(http.Header),
+		}
+	}
+	return resp, nil
+}
+
+// createMockClient creates a http.Client with a mock transport for testing
+func createMockClient(responses map[string]*http.Response, err error) *http.Client {
+	transport := &mockTransport{responses: responses, err: err}
+	return &http.Client{Transport: transport}
+}
+
+// captureOutput captures stdout output during test execution
+func captureOutput(f func()) (string, error) {
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	outC := make(chan string)
+	go func() {
+		var buf bytes.Buffer
+		io.Copy(&buf, r)
+		outC <- buf.String()
+	}()
+
+	f()
+
+	w.Close()
+	os.Stdout = old
+	out := <-outC
+
+	return out, nil
+}
 
 func TestParseAudioInfo(t *testing.T) {
 	testCases := []struct {
@@ -513,80 +539,80 @@ func TestSetupSoxCommandDocker(t *testing.T) {
 }
 
 func TestSelfUpdateNetworkFailure(t *testing.T) {
-	// Test selfUpdate with network failure scenarios
 	originalVersion := version
 	version = "v1.0.0"
 	defer func() { version = originalVersion }()
 
-	// This test verifies that the function handles various network conditions gracefully
-	// In a real scenario, this would test against a mock server, but since the URL is hardcoded,
-	// we test the error handling logic with the real API
-	err := selfUpdate()
-	// We don't assert on specific errors since network conditions vary
-	// The important thing is that the function doesn't panic and provides helpful error messages
-	t.Logf("selfUpdate network test result: %v", err)
+	// Create mock client that returns network error
+	mockClient := createMockClient(nil, fmt.Errorf("network error"))
+
+	output, err := captureOutput(func() {
+		err = selfUpdate(mockClient)
+	})
+	if err != nil {
+		t.Fatalf("Failed to capture output: %v", err)
+	}
+
+	// Verify error handling and output
+	if err == nil {
+		t.Error("Expected error for network failure")
+	}
+
+	// Check for expected output messages
+	if !strings.Contains(output, "Current version: v1.0.0") {
+		t.Error("Expected current version in output")
+	}
+	if !strings.Contains(output, "Checking for updates from:") {
+		t.Error("Expected checking URL in output")
+	}
+	if !strings.Contains(output, "Failed to check for updates from") {
+		t.Error("Expected failure message in output")
+	}
+	if !strings.Contains(output, "Please visit https://github.com/Ardakilic/flac-to-16bit-converter") {
+		t.Error("Expected fallback instructions in output")
+	}
 }
 
-// MockServer represents a test server for GitHub API mocking
-type MockServer struct {
-	server *httptest.Server
-}
-
-// NewMockServer creates a new mock server with predefined responses
-func NewMockServer() *MockServer {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/repos/Ardakilic/flac-to-16bit-converter/releases/latest":
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{"tag_name": "v1.0.0"})
-		case "/repos/test/repo/releases/latest":
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"tag_name": "v1.1.0",
-				"assets": []map[string]interface{}{
-					{
-						"name":               "flac-converter-darwin-arm64.tar.gz",
-						"browser_download_url": "http://example.com/download.tar.gz",
-					},
-				},
-			})
-		case "/403":
-			w.WriteHeader(http.StatusForbidden)
-			w.Write([]byte("Forbidden"))
-		case "/500":
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte("Internal Server Error"))
-		case "/invalid-json":
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte("invalid json"))
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	return &MockServer{server: server}
-}
-
-// Close shuts down the mock server
-func (m *MockServer) Close() {
-	m.server.Close()
-}
-
-// URL returns the server URL
-func (m *MockServer) URL() string {
-	return m.server.URL
-}
+// The MockServer is no longer needed as we're using client mocking
 
 func TestSelfUpdateUpToDate(t *testing.T) {
-	// Test selfUpdate when already up to date
 	originalVersion := version
 	version = "v1.0.0"
 	defer func() { version = originalVersion }()
 
-	// Since we can't easily mock the hardcoded URL, this test just verifies
-	// the function doesn't crash and handles the real API response gracefully
-	err := selfUpdate()
-	// We don't assert on specific errors since network conditions vary
-	t.Logf("selfUpdate up-to-date test result: %v", err)
+	// Mock response with same version
+	apiURL := "https://api.github.com/repos/Ardakilic/flac-to-16bit-converter/releases/latest"
+	respBody := `{"tag_name": "v1.0.0"}`
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(respBody)),
+		Header:     make(http.Header),
+	}
+	responses := map[string]*http.Response{apiURL: resp}
+	mockClient := createMockClient(responses, nil)
+
+	output, err := captureOutput(func() {
+		err = selfUpdate(mockClient)
+	})
+	if err != nil {
+		t.Fatalf("Failed to capture output: %v", err)
+	}
+
+	// Should not error
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	// Check for expected output
+	if !strings.Contains(output, "Current version: v1.0.0") {
+		t.Error("Expected current version in output")
+	}
+	if !strings.Contains(output, "Latest version: v1.0.0") {
+		t.Error("Expected latest version in output")
+	}
+	if !strings.Contains(output, "You are running the latest version.") {
+		t.Error("Expected up-to-date message")
+	}
 }
 
 func TestCopyFileErrors(t *testing.T) {
@@ -749,81 +775,128 @@ func TestCompareVersionsEdgeCases(t *testing.T) {
 }
 
 func TestSelfUpdateDevVersion(t *testing.T) {
-	// Test selfUpdate with dev version
 	originalVersion := version
 	version = "dev"
 	defer func() { version = originalVersion }()
 
-	err := selfUpdate()
+	// Use default client, but since dev version skips, no request
+	output, err := captureOutput(func() {
+		err = selfUpdate(http.DefaultClient)
+	})
 	if err != nil {
-		t.Errorf("Expected no error for dev version, got %v", err)
+		t.Fatalf("Failed to capture output: %v", err)
+	}
+
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	if !strings.Contains(output, "Development version detected. Skipping update check.") {
+		t.Error("Expected dev version message")
 	}
 }
 
 func TestSelfUpdateSameVersion(t *testing.T) {
-	// Test selfUpdate when local version matches remote version
 	originalVersion := version
 	version = "v1.0.0"
 	defer func() { version = originalVersion }()
 
-	// This tests the "already up to date" scenario
-	// The function should detect when versions match and provide appropriate messaging
-	err := selfUpdate()
-	t.Logf("selfUpdate same version test result: %v", err)
+	// Mock response with same version
+	apiURL := "https://api.github.com/repos/Ardakilic/flac-to-16bit-converter/releases/latest"
+	respBody := `{"tag_name": "v1.0.0"}`
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(respBody)),
+		Header:     make(http.Header),
+	}
+	responses := map[string]*http.Response{apiURL: resp}
+	mockClient := createMockClient(responses, nil)
+
+	output, err := captureOutput(func() {
+		err = selfUpdate(mockClient)
+	})
+	if err != nil {
+		t.Fatalf("Failed to capture output: %v", err)
+	}
+
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	if !strings.Contains(output, "You are running the latest version.") {
+		t.Error("Expected same version message")
+	}
 }
 
 func TestSelfUpdateNewerLocalVersion(t *testing.T) {
-	// Test selfUpdate when local version is newer than remote version
 	originalVersion := version
 	version = "v2.0.0"
 	defer func() { version = originalVersion }()
 
-	// This tests the scenario where the local version is ahead of the remote version
-	// The function should detect this and provide appropriate messaging
-	err := selfUpdate()
-	t.Logf("selfUpdate newer local version test result: %v", err)
+	// Mock response with older version
+	apiURL := "https://api.github.com/repos/Ardakilic/flac-to-16bit-converter/releases/latest"
+	respBody := `{"tag_name": "v1.0.0"}`
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(respBody)),
+		Header:     make(http.Header),
+	}
+	responses := map[string]*http.Response{apiURL: resp}
+	mockClient := createMockClient(responses, nil)
+
+	output, err := captureOutput(func() {
+		err = selfUpdate(mockClient)
+	})
+	if err != nil {
+		t.Fatalf("Failed to capture output: %v", err)
+	}
+
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	if !strings.Contains(output, "You are running a newer version v2.0.0 than the latest release v1.0.0.") {
+		t.Error("Expected newer local version message")
+	}
 }
 
 func TestSelfUpdateInvalidVersion(t *testing.T) {
-	// Test selfUpdate with invalid version format
 	originalVersion := version
 	version = "invalid-version"
 	defer func() { version = originalVersion }()
 
-	// This tests how the function handles malformed version strings
-	// The version comparison logic should handle invalid formats gracefully
-	err := selfUpdate()
-	t.Logf("selfUpdate invalid version test result: %v", err)
+	// Mock response with valid version
+	apiURL := "https://api.github.com/repos/Ardakilic/flac-to-16bit-converter/releases/latest"
+	respBody := `{"tag_name": "v1.0.0"}`
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(respBody)),
+		Header:     make(http.Header),
+	}
+	responses := map[string]*http.Response{apiURL: resp}
+	mockClient := createMockClient(responses, nil)
+
+	output, err := captureOutput(func() {
+		err = selfUpdate(mockClient)
+	})
+	if err != nil {
+		t.Fatalf("Failed to capture output: %v", err)
+	}
+
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	// Since compareVersions treats invalid as 0, it should show newer or equal
+	if !strings.Contains(output, "Current version: invalid-version") {
+		t.Error("Expected invalid version in output")
+	}
+	// Depending on comparison, but at least it doesn't panic
 }
 
 func TestSelfUpdateWithMockServer(t *testing.T) {
-	// Test selfUpdate with a mock server for more controlled testing
-	originalVersion := version
-	version = "v1.0.0"
-	defer func() { version = originalVersion }()
-
-	// Create a test server that simulates GitHub API
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/repos/test/repo/releases/latest" {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"tag_name": "v1.1.0",
-				"assets": []map[string]interface{}{
-					{
-						"name":               "flac-converter-darwin-arm64.tar.gz",
-						"browser_download_url": "http://example.com/download.tar.gz",
-					},
-				},
-			})
-		} else {
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer server.Close()
-
-	// We can't easily mock the hardcoded URL, but this shows the structure for future improvements
-	t.Logf("Mock server test setup complete at: %s", server.URL)
+	// This test is now properly mocked via client
+	t.Skip("Replaced by individual mock client tests")
 }
 
 func TestCopyFilePermissions(t *testing.T) {
@@ -1562,64 +1635,129 @@ func TestRunConverter(t *testing.T) {
 }
 
 func TestSelfUpdateHTTPError(t *testing.T) {
-	// Test selfUpdate with HTTP request failure
 	originalVersion := version
 	version = "v1.0.0"
 	defer func() { version = originalVersion }()
 
-	// This will attempt to make HTTP request which may fail or succeed
-	// depending on network conditions, but tests the error handling path
-	err := selfUpdate()
+	// Mock network error
+	mockClient := createMockClient(nil, fmt.Errorf("connection refused"))
+
+	output, err := captureOutput(func() {
+		err = selfUpdate(mockClient)
+	})
 	if err != nil {
-		t.Logf("selfUpdate HTTP error test: %v", err)
+		t.Fatalf("Failed to capture output: %v", err)
+	}
+
+	if err == nil {
+		t.Error("Expected error for HTTP failure")
+	}
+
+	if !strings.Contains(output, "Failed to check for updates from") {
+		t.Error("Expected HTTP failure message")
 	}
 }
 
 func TestSelfUpdateBadStatusCode(t *testing.T) {
-	// Test selfUpdate error handling for various HTTP status codes
 	originalVersion := version
 	version = "v1.0.0"
 	defer func() { version = originalVersion }()
 
-	// This tests the error handling paths for non-200 HTTP status codes
-	// Since the URL is hardcoded, we test against the real API which may return
-	// various status codes (403 for rate limiting, 404 for not found, etc.)
-	err := selfUpdate()
+	// Mock 500 status
+	apiURL := "https://api.github.com/repos/Ardakilic/flac-to-16bit-converter/releases/latest"
+	resp := &http.Response{
+		StatusCode: http.StatusInternalServerError,
+		Body:       io.NopCloser(strings.NewReader("Server Error")),
+		Header:     make(http.Header),
+	}
+	responses := map[string]*http.Response{apiURL: resp}
+	mockClient := createMockClient(responses, nil)
+
+	output, err := captureOutput(func() {
+		err = selfUpdate(mockClient)
+	})
 	if err != nil {
-		t.Logf("selfUpdate bad status test: %v", err)
-		// The function should handle different status codes gracefully and provide
-		// appropriate error messages with fallback instructions
+		t.Fatalf("Failed to capture output: %v", err)
+	}
+
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	if !strings.Contains(output, "Failed to fetch release info") {
+		t.Error("Expected bad status message")
+	}
+	if !strings.Contains(output, "HTTP 500") {
+		t.Error("Expected status code in output")
 	}
 }
 
 func TestSelfUpdateJSONParseError(t *testing.T) {
-	// Test selfUpdate JSON parsing error handling
 	originalVersion := version
 	version = "v1.0.0"
 	defer func() { version = originalVersion }()
 
-	// This tests the JSON parsing error handling path
-	// In a real scenario with proper mocking, this would test against malformed JSON
-	// Since the URL is hardcoded, we test the error handling logic with real API responses
-	err := selfUpdate()
+	// Mock invalid JSON
+	apiURL := "https://api.github.com/repos/Ardakilic/flac-to-16bit-converter/releases/latest"
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader("invalid json {")),
+		Header:     make(http.Header),
+	}
+	responses := map[string]*http.Response{apiURL: resp}
+	mockClient := createMockClient(responses, nil)
+
+	output, err := captureOutput(func() {
+		err = selfUpdate(mockClient)
+	})
 	if err != nil {
-		t.Logf("selfUpdate JSON parse error test: %v", err)
-		// The function should handle JSON parsing errors gracefully
+		t.Fatalf("Failed to capture output: %v", err)
+	}
+
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	if !strings.Contains(output, "Failed to parse release info") {
+		t.Error("Expected JSON parse error message")
 	}
 }
 
 func TestSelfUpdateDownloadFailure(t *testing.T) {
-	// Test selfUpdate download failure scenarios
 	originalVersion := version
-	version = "v1.0.0"
+	version = "v0.9.0" // Older version to trigger download
 	defer func() { version = originalVersion }()
 
-	// This tests download error handling paths
-	// Since the URL is hardcoded, we test the download error handling with real scenarios
-	// The function should handle download failures gracefully with appropriate error messages
-	err := selfUpdate()
+	// Mock API success, but download error
+	apiURL := "https://api.github.com/repos/Ardakilic/flac-to-16bit-converter/releases/latest"
+	respBody := `{"tag_name": "v1.0.0"}`
+	apiResp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(respBody)),
+		Header:     make(http.Header),
+	}
+	assetURL := "https://github.com/Ardakilic/flac-to-16bit-converter/releases/download/v1.0.0/flac-converter-linux-amd64.tar.gz" // Assume linux
+	// For download, return error
+	responses := map[string]*http.Response{apiURL: apiResp}
+	mockClient := createMockClient(responses, nil) // But for assetURL, since not in map, it will 404, but to simulate error, set transport err for second call? Wait, since it's the same client, but responses don't have assetURL, it will 404.
+
+	// To simulate download error, use a transport that errors on second call, but for simplicity, let it 404
+	output, err := captureOutput(func() {
+		err = selfUpdate(mockClient)
+	})
 	if err != nil {
-		t.Logf("selfUpdate download failure test: %v", err)
+		t.Fatalf("Failed to capture output: %v", err)
+	}
+
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	if !strings.Contains(output, "New version v1.0.0 available. Updating...") {
+		t.Error("Expected update trigger")
+	}
+	if !strings.Contains(output, "Failed to download update") {
+		t.Error("Expected download failure message")
 	}
 }
 
@@ -2033,14 +2171,39 @@ func TestSelfUpdateHTTP403ErrorMessage(t *testing.T) {
 }
 
 func TestSelfUpdateURLErrorMessages(t *testing.T) {
-	// Test that error messages in selfUpdate include URL information
 	originalVersion := version
 	version = "v1.0.0"
 	defer func() { version = originalVersion }()
 
-	// This test verifies that error messages include the URLs being accessed
-	// The updated error messages should show both the API URL and download URLs
-	err := selfUpdate()
-	// We don't assert on specific errors, but the function should display URLs in error messages
-	t.Logf("selfUpdate URL display test result: %v", err)
+	// Mock 403 for API
+	apiURL := "https://api.github.com/repos/Ardakilic/flac-to-16bit-converter/releases/latest"
+	resp403 := &http.Response{
+		StatusCode: http.StatusForbidden,
+		Body:       io.NopCloser(strings.NewReader("Forbidden")),
+		Header:     make(http.Header),
+	}
+	responses := map[string]*http.Response{apiURL: resp403}
+	mockClient := createMockClient(responses, nil)
+
+	output, err := captureOutput(func() {
+		err = selfUpdate(mockClient)
+	})
+	if err != nil {
+		t.Fatalf("Failed to capture output: %v", err)
+	}
+
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	// Verify URL in error messages
+	if !strings.Contains(output, apiURL) {
+		t.Error("Expected API URL in error message")
+	}
+	if !strings.Contains(output, "HTTP 403 (Forbidden)") {
+		t.Error("Expected 403 status in output")
+	}
+	if !strings.Contains(output, "GitHub API rate limiting") {
+		t.Error("Expected rate limiting message")
+	}
 }

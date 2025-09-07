@@ -80,7 +80,7 @@ func runConverter(cmd *cobra.Command, args []string) error {
 		if len(args) > 0 {
 			return fmt.Errorf("--self-update does not take arguments")
 		}
-		return selfUpdate()
+		return selfUpdate(http.DefaultClient)
 	}
 
 	if len(args) == 0 {
@@ -438,7 +438,7 @@ func compareVersions(v1, v2 string) int {
 	return 0
 }
 
-func selfUpdate() error {
+func selfUpdate(client *http.Client) error {
 	currentVersion := version
 	if currentVersion == "dev" {
 		fmt.Println("Development version detected. Skipping update check.")
@@ -451,7 +451,13 @@ func selfUpdate() error {
 	apiURL := "https://api.github.com/repos/Ardakilic/flac-to-16bit-converter/releases/latest"
 	fmt.Printf("Checking for updates from: %s\n", apiURL)
 
-	resp, err := http.Get(apiURL)
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		fmt.Printf("Failed to create request for %s: %v\n", apiURL, err)
+		fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+		return nil
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Printf("Failed to check for updates from %s: %v\n", apiURL, err)
 		fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
@@ -508,7 +514,13 @@ func selfUpdate() error {
 
 		// Download the asset
 		fmt.Printf("Downloading update from: %s\n", assetURL)
-		downloadResp, err := http.Get(assetURL)
+		downloadReq, err := http.NewRequest("GET", assetURL, nil)
+		if err != nil {
+			fmt.Printf("Failed to create download request for %s: %v\n", assetURL, err)
+			fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+			return nil
+		}
+		downloadResp, err := client.Do(downloadReq)
 		if err != nil {
 			fmt.Printf("Failed to download update from %s: %v\n", assetURL, err)
 			fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
