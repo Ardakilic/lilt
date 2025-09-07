@@ -1,13 +1,19 @@
 package main
 
 import (
+	"archive/tar"
+	"archive/zip"
 	"bufio"
+	"compress/gzip"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -31,8 +37,9 @@ type AudioInfo struct {
 }
 
 var (
-	config  Config
-	version = "dev" // This will be set during build time
+	config         Config
+	version        = "dev" // This will be set during build time
+	selfUpdateFlag bool
 )
 
 var rootCmd = &cobra.Command{
@@ -45,7 +52,7 @@ It also copies MP3 files and image files (JPG, PNG) to the target directory.
 
 Copyright (C) 2025 Arda Kilicdagi
 Licensed under MIT License`,
-	Args:    cobra.ExactArgs(1),
+	Args:    cobra.MaximumNArgs(1),
 	RunE:    runConverter,
 	Version: version,
 }
@@ -55,6 +62,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&config.CopyImages, "copy-images", false, "Copy JPG and PNG files")
 	rootCmd.Flags().BoolVar(&config.UseDocker, "use-docker", false, "Use Docker to run Sox instead of local installation")
 	rootCmd.Flags().StringVar(&config.DockerImage, "docker-image", "ardakilic/sox_ng:latest", "Specify Docker image")
+	rootCmd.Flags().BoolVar(&selfUpdateFlag, "self-update", false, "Check for updates and self-update if newer version available")
 
 	// Set default values
 	config.SoxCommand = "sox"
@@ -68,6 +76,17 @@ func main() {
 }
 
 func runConverter(cmd *cobra.Command, args []string) error {
+	if selfUpdateFlag {
+		if len(args) > 0 {
+			return fmt.Errorf("--self-update does not take arguments")
+		}
+		return selfUpdate()
+	}
+
+	if len(args) == 0 {
+		return fmt.Errorf("source directory required")
+	}
+
 	config.SourceDir = args[0]
 
 	// Validate source directory
@@ -377,6 +396,273 @@ func copyFile(src, dst string) error {
 	// Preserve file timestamps (access time and modification time)
 	if err := os.Chtimes(dst, sourceInfo.ModTime(), sourceInfo.ModTime()); err != nil {
 		return err
+	}
+
+	return nil
+}
+
+type GitHubRelease struct {
+	TagName string `json:"tag_name"`
+}
+
+// compareVersions compares two semantic versions (v1 and v2) and returns:
+// -1 if v1 < v2
+// 0 if v1 == v2
+// 1 if v1 > v2
+// Assumes versions are like "v1.2.3" or "1.2.3", ignores 'v' prefix
+func compareVersions(v1, v2 string) int {
+	// Remove 'v' prefix if present
+	v1 = strings.TrimPrefix(v1, "v")
+	v2 = strings.TrimPrefix(v2, "v")
+
+	parts1 := strings.Split(v1, ".")
+	parts2 := strings.Split(v2, ".")
+
+	// Pad to 3 parts for major.minor.patch
+	for len(parts1) < 3 {
+		parts1 = append(parts1, "0")
+	}
+	for len(parts2) < 3 {
+		parts2 = append(parts2, "0")
+	}
+
+	for i := 0; i < 3; i++ {
+		p1, _ := strconv.Atoi(parts1[i])
+		p2, _ := strconv.Atoi(parts2[i])
+		if p1 < p2 {
+			return -1
+		} else if p1 > p2 {
+			return 1
+		}
+	}
+	return 0
+}
+
+func selfUpdate() error {
+	currentVersion := version
+	if currentVersion == "dev" {
+		fmt.Println("Development version detected. Skipping update check.")
+		return nil
+	}
+
+	fmt.Printf("Current version: %s\n", currentVersion)
+
+	// Fetch latest release from GitHub API
+	apiURL := "https://api.github.com/repos/Ardakilic/flac-to-16bit-converter/releases/latest"
+	fmt.Printf("Checking for updates from: %s\n", apiURL)
+
+	resp, err := http.Get(apiURL)
+	if err != nil {
+		fmt.Printf("Failed to check for updates from %s: %v\n", apiURL, err)
+		fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusForbidden {
+			fmt.Printf("Failed to fetch release info from %s: HTTP %d (Forbidden)\n", apiURL, resp.StatusCode)
+			fmt.Println("This may be due to GitHub API rate limiting. Please wait a few minutes and try again, or visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+		} else {
+			fmt.Printf("Failed to fetch release info from %s: HTTP %d\n", apiURL, resp.StatusCode)
+			fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+		}
+		return nil
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Printf("Failed to read response from %s: %v\n", apiURL, err)
+		fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+		return nil
+	}
+
+	var release GitHubRelease
+	if err := json.Unmarshal(body, &release); err != nil {
+		fmt.Printf("Failed to parse release info from %s: %v\n", apiURL, err)
+		fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+		return nil
+	}
+
+	latestVersion := release.TagName
+	fmt.Printf("Latest version: %s\n", latestVersion)
+
+	cmp := compareVersions(currentVersion, latestVersion)
+	if cmp < 0 {
+		fmt.Printf("New version %s available. Updating...\n", latestVersion)
+
+		// Platform detection
+		goos := runtime.GOOS
+		goarch := runtime.GOARCH
+
+		// Construct asset filename
+		var filename string
+		if goos == "windows" {
+			filename = fmt.Sprintf("flac-converter-%s-%s.exe.zip", goos, goarch)
+		} else {
+			filename = fmt.Sprintf("flac-converter-%s-%s.tar.gz", goos, goarch)
+		}
+
+		assetURL := fmt.Sprintf("https://github.com/Ardakilic/flac-to-16bit-converter/releases/download/%s/%s", latestVersion, filename)
+		fmt.Printf("Downloading from: %s\n", assetURL)
+
+		// Download the asset
+		fmt.Printf("Downloading update from: %s\n", assetURL)
+		downloadResp, err := http.Get(assetURL)
+		if err != nil {
+			fmt.Printf("Failed to download update from %s: %v\n", assetURL, err)
+			fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+			return nil
+		}
+		defer downloadResp.Body.Close()
+
+		if downloadResp.StatusCode != http.StatusOK {
+			fmt.Printf("Failed to download update from %s: HTTP %d\n", assetURL, downloadResp.StatusCode)
+			fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+			return nil
+		}
+
+		// Create temp file for download
+		tempFile, err := os.CreateTemp("", "flac-converter-update-*")
+		if err != nil {
+			fmt.Printf("Failed to create temp file: %v\n", err)
+			fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+			return nil
+		}
+		defer os.Remove(tempFile.Name()) // Clean up if error
+
+		_, err = io.Copy(tempFile, downloadResp.Body)
+		if err != nil {
+			fmt.Printf("Failed to download update: %v\n", err)
+			fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+			return nil
+		}
+		tempFile.Close()
+
+		// Create temp dir for extraction
+		tempDir, err := os.MkdirTemp("", "flac-converter-extract-*")
+		if err != nil {
+			fmt.Printf("Failed to create temp dir: %v\n", err)
+			fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+			return nil
+		}
+		defer os.RemoveAll(tempDir) // Clean up if error
+
+		// Extract
+		if goos == "windows" {
+			// Extract zip
+			r, err := zip.OpenReader(tempFile.Name())
+			if err != nil {
+				fmt.Printf("Failed to open zip: %v\n", err)
+				fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+				return nil
+			}
+			defer r.Close()
+
+			for _, f := range r.File {
+				if f.Name == filename[:len(filename)-4] { // Remove .zip
+					rc, err := f.Open()
+					if err != nil {
+						continue
+					}
+					outFile, err := os.Create(filepath.Join(tempDir, f.Name))
+					if err != nil {
+						rc.Close()
+						continue
+					}
+					_, err = io.Copy(outFile, rc)
+					outFile.Close()
+					rc.Close()
+					break
+				}
+			}
+		} else {
+			// Extract tar.gz
+			file, err := os.Open(tempFile.Name())
+			if err != nil {
+				fmt.Printf("Failed to open tar.gz: %v\n", err)
+				fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+				return nil
+			}
+			defer file.Close()
+
+			gzr, err := gzip.NewReader(file)
+			if err != nil {
+				fmt.Printf("Failed to read gzip: %v\n", err)
+				fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+				return nil
+			}
+			defer gzr.Close()
+
+			tr := tar.NewReader(gzr)
+			for {
+				header, err := tr.Next()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					fmt.Printf("Failed to extract tar: %v\n", err)
+					fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+					return nil
+				}
+				if header.Typeflag == tar.TypeReg && filepath.Base(header.Name) == "flac-converter-"+goos+"-"+goarch {
+					outFile, err := os.Create(filepath.Join(tempDir, header.Name))
+					if err != nil {
+						continue
+					}
+					_, err = io.Copy(outFile, tr)
+					outFile.Close()
+					break
+				}
+			}
+		}
+
+		// Find the extracted binary
+		binaryName := "flac-converter-" + goos + "-" + goarch
+		if goos == "windows" {
+			binaryName += ".exe"
+		}
+		newBinaryPath := filepath.Join(tempDir, binaryName)
+		if _, err := os.Stat(newBinaryPath); os.IsNotExist(err) {
+			fmt.Printf("Failed to extract binary: %s not found\n", binaryName)
+			fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+			return nil
+		}
+
+		// Replacement
+		currentPath, err := os.Executable()
+		if err != nil {
+			fmt.Printf("Failed to get current executable path: %v\n", err)
+			fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+			return nil
+		}
+
+		backupPath := currentPath + ".old"
+		if err := os.Rename(currentPath, backupPath); err != nil {
+			fmt.Printf("Failed to backup current binary: %v\n", err)
+			fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+			return nil
+		}
+
+		if err := os.Rename(newBinaryPath, currentPath); err != nil {
+			// Restore backup
+			os.Rename(backupPath, currentPath)
+			fmt.Printf("Failed to replace binary: %v\n", err)
+			fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+			return nil
+		}
+
+		// Make executable
+		if err := os.Chmod(currentPath, 0755); err != nil {
+			fmt.Printf("Warning: Failed to set permissions on new binary: %v\n", err)
+		}
+
+		fmt.Println("Update complete. Please restart the application.")
+		return nil
+	} else if cmp == 0 {
+		fmt.Println("You are running the latest version.")
+	} else {
+		fmt.Printf("You are running a newer version %s than the latest release %s.\n", currentVersion, latestVersion)
 	}
 
 	return nil
