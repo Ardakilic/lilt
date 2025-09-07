@@ -5,11 +5,9 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -250,39 +248,39 @@ func TestCopyFile(t *testing.T) {
 
 func TestCompareVersions(t *testing.T) {
 	testCases := []struct {
-		name string
-		v1   string
-		v2   string
+		name     string
+		v1       string
+		v2       string
 		expected int
 	}{
 		{
-			name: "v1.0.0 < v1.0.1",
-			v1: "v1.0.0",
-			v2: "v1.0.1",
+			name:     "v1.0.0 < v1.0.1",
+			v1:       "v1.0.0",
+			v2:       "v1.0.1",
 			expected: -1,
 		},
 		{
-			name: "v1.0.0 == v1.0.0",
-			v1: "v1.0.0",
-			v2: "v1.0.0",
+			name:     "v1.0.0 == v1.0.0",
+			v1:       "v1.0.0",
+			v2:       "v1.0.0",
 			expected: 0,
 		},
 		{
-			name: "v2.0.0 > v1.0.0",
-			v1: "v2.0.0",
-			v2: "v1.0.0",
+			name:     "v2.0.0 > v1.0.0",
+			v1:       "v2.0.0",
+			v2:       "v1.0.0",
 			expected: 1,
 		},
 		{
-			name: "1.2.3 < v1.2.4",
-			v1: "1.2.3",
-			v2: "v1.2.4",
+			name:     "1.2.3 < v1.2.4",
+			v1:       "1.2.3",
+			v2:       "v1.2.4",
 			expected: -1,
 		},
 		{
-			name: "v1.0 < v1.0.1",
-			v1: "v1.0",
-			v2: "v1.0.1",
+			name:     "v1.0 < v1.0.1",
+			v1:       "v1.0",
+			v2:       "v1.0.1",
 			expected: -1,
 		},
 	}
@@ -308,11 +306,23 @@ func TestSelfUpdateFetchLatest(t *testing.T) {
 	// Test dev version skip
 	originalVersion := version
 	version = "dev"
-	err := selfUpdate()
-	if err != nil {
-		t.Errorf("Expected no error for dev version")
+	defer func() { version = originalVersion }()
+
+	var err error
+	output, captureErr := captureOutput(func() {
+		err = selfUpdate(http.DefaultClient)
+	})
+	if captureErr != nil {
+		t.Fatalf("Failed to capture output: %v", captureErr)
 	}
-	version = originalVersion
+
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	if !strings.Contains(output, "Development version detected. Skipping update check.") {
+		t.Error("Expected dev version message")
+	}
 }
 
 func TestExtractTarGZ(t *testing.T) {
@@ -546,16 +556,17 @@ func TestSelfUpdateNetworkFailure(t *testing.T) {
 	// Create mock client that returns network error
 	mockClient := createMockClient(nil, fmt.Errorf("network error"))
 
-	output, err := captureOutput(func() {
+	var err error
+	output, captureErr := captureOutput(func() {
 		err = selfUpdate(mockClient)
 	})
-	if err != nil {
-		t.Fatalf("Failed to capture output: %v", err)
+	if captureErr != nil {
+		t.Fatalf("Failed to capture output: %v", captureErr)
 	}
 
-	// Verify error handling and output
-	if err == nil {
-		t.Error("Expected error for network failure")
+	// Verify graceful error handling - function should not return error but print messages
+	if err != nil {
+		t.Errorf("Expected no error for network failure (graceful handling), got: %v", err)
 	}
 
 	// Check for expected output messages
@@ -591,11 +602,12 @@ func TestSelfUpdateUpToDate(t *testing.T) {
 	responses := map[string]*http.Response{apiURL: resp}
 	mockClient := createMockClient(responses, nil)
 
-	output, err := captureOutput(func() {
+	var err error
+	output, captureErr := captureOutput(func() {
 		err = selfUpdate(mockClient)
 	})
-	if err != nil {
-		t.Fatalf("Failed to capture output: %v", err)
+	if captureErr != nil {
+		t.Fatalf("Failed to capture output: %v", captureErr)
 	}
 
 	// Should not error
@@ -727,39 +739,39 @@ func TestCopyImageFilesErrors(t *testing.T) {
 
 func TestCompareVersionsEdgeCases(t *testing.T) {
 	testCases := []struct {
-		name string
-		v1   string
-		v2   string
+		name     string
+		v1       string
+		v2       string
 		expected int
 	}{
 		{
-			name: "empty versions",
-			v1: "",
-			v2: "",
+			name:     "empty versions",
+			v1:       "",
+			v2:       "",
 			expected: 0,
 		},
 		{
-			name: "single number vs double",
-			v1: "1",
-			v2: "1.0",
+			name:     "single number vs double",
+			v1:       "1",
+			v2:       "1.0",
 			expected: 0,
 		},
 		{
-			name: "double vs triple",
-			v1: "1.0",
-			v2: "1.0.0",
+			name:     "double vs triple",
+			v1:       "1.0",
+			v2:       "1.0.0",
 			expected: 0,
 		},
 		{
-			name: "major version difference",
-			v1: "2.0.0",
-			v2: "1.9.9",
+			name:     "major version difference",
+			v1:       "2.0.0",
+			v2:       "1.9.9",
 			expected: 1,
 		},
 		{
-			name: "patch version difference",
-			v1: "1.0.1",
-			v2: "1.0.0",
+			name:     "patch version difference",
+			v1:       "1.0.1",
+			v2:       "1.0.0",
 			expected: 1,
 		},
 	}
@@ -780,11 +792,12 @@ func TestSelfUpdateDevVersion(t *testing.T) {
 	defer func() { version = originalVersion }()
 
 	// Use default client, but since dev version skips, no request
-	output, err := captureOutput(func() {
+	var err error
+	output, captureErr := captureOutput(func() {
 		err = selfUpdate(http.DefaultClient)
 	})
-	if err != nil {
-		t.Fatalf("Failed to capture output: %v", err)
+	if captureErr != nil {
+		t.Fatalf("Failed to capture output: %v", captureErr)
 	}
 
 	if err != nil {
@@ -812,11 +825,12 @@ func TestSelfUpdateSameVersion(t *testing.T) {
 	responses := map[string]*http.Response{apiURL: resp}
 	mockClient := createMockClient(responses, nil)
 
-	output, err := captureOutput(func() {
+	var err error
+	output, captureErr := captureOutput(func() {
 		err = selfUpdate(mockClient)
 	})
-	if err != nil {
-		t.Fatalf("Failed to capture output: %v", err)
+	if captureErr != nil {
+		t.Fatalf("Failed to capture output: %v", captureErr)
 	}
 
 	if err != nil {
@@ -844,11 +858,12 @@ func TestSelfUpdateNewerLocalVersion(t *testing.T) {
 	responses := map[string]*http.Response{apiURL: resp}
 	mockClient := createMockClient(responses, nil)
 
-	output, err := captureOutput(func() {
+	var err error
+	output, captureErr := captureOutput(func() {
 		err = selfUpdate(mockClient)
 	})
-	if err != nil {
-		t.Fatalf("Failed to capture output: %v", err)
+	if captureErr != nil {
+		t.Fatalf("Failed to capture output: %v", captureErr)
 	}
 
 	if err != nil {
@@ -876,11 +891,12 @@ func TestSelfUpdateInvalidVersion(t *testing.T) {
 	responses := map[string]*http.Response{apiURL: resp}
 	mockClient := createMockClient(responses, nil)
 
-	output, err := captureOutput(func() {
+	var err error
+	output, captureErr := captureOutput(func() {
 		err = selfUpdate(mockClient)
 	})
-	if err != nil {
-		t.Fatalf("Failed to capture output: %v", err)
+	if captureErr != nil {
+		t.Fatalf("Failed to capture output: %v", captureErr)
 	}
 
 	if err != nil {
@@ -1642,19 +1658,24 @@ func TestSelfUpdateHTTPError(t *testing.T) {
 	// Mock network error
 	mockClient := createMockClient(nil, fmt.Errorf("connection refused"))
 
-	output, err := captureOutput(func() {
+	var err error
+	output, captureErr := captureOutput(func() {
 		err = selfUpdate(mockClient)
 	})
-	if err != nil {
-		t.Fatalf("Failed to capture output: %v", err)
+	if captureErr != nil {
+		t.Fatalf("Failed to capture output: %v", captureErr)
 	}
 
-	if err == nil {
-		t.Error("Expected error for HTTP failure")
+	// Verify graceful error handling - function should not return error but print messages
+	if err != nil {
+		t.Errorf("Expected no error for HTTP failure (graceful handling), got: %v", err)
 	}
 
 	if !strings.Contains(output, "Failed to check for updates from") {
 		t.Error("Expected HTTP failure message")
+	}
+	if !strings.Contains(output, "Please visit https://github.com/Ardakilic/flac-to-16bit-converter") {
+		t.Error("Expected fallback instructions in output")
 	}
 }
 
@@ -1673,11 +1694,12 @@ func TestSelfUpdateBadStatusCode(t *testing.T) {
 	responses := map[string]*http.Response{apiURL: resp}
 	mockClient := createMockClient(responses, nil)
 
-	output, err := captureOutput(func() {
+	var err error
+	output, captureErr := captureOutput(func() {
 		err = selfUpdate(mockClient)
 	})
-	if err != nil {
-		t.Fatalf("Failed to capture output: %v", err)
+	if captureErr != nil {
+		t.Fatalf("Failed to capture output: %v", captureErr)
 	}
 
 	if err != nil {
@@ -1707,11 +1729,12 @@ func TestSelfUpdateJSONParseError(t *testing.T) {
 	responses := map[string]*http.Response{apiURL: resp}
 	mockClient := createMockClient(responses, nil)
 
-	output, err := captureOutput(func() {
+	var err error
+	output, captureErr := captureOutput(func() {
 		err = selfUpdate(mockClient)
 	})
-	if err != nil {
-		t.Fatalf("Failed to capture output: %v", err)
+	if captureErr != nil {
+		t.Fatalf("Failed to capture output: %v", captureErr)
 	}
 
 	if err != nil {
@@ -1736,17 +1759,17 @@ func TestSelfUpdateDownloadFailure(t *testing.T) {
 		Body:       io.NopCloser(strings.NewReader(respBody)),
 		Header:     make(http.Header),
 	}
-	assetURL := "https://github.com/Ardakilic/flac-to-16bit-converter/releases/download/v1.0.0/flac-converter-linux-amd64.tar.gz" // Assume linux
 	// For download, return error
 	responses := map[string]*http.Response{apiURL: apiResp}
 	mockClient := createMockClient(responses, nil) // But for assetURL, since not in map, it will 404, but to simulate error, set transport err for second call? Wait, since it's the same client, but responses don't have assetURL, it will 404.
 
 	// To simulate download error, use a transport that errors on second call, but for simplicity, let it 404
-	output, err := captureOutput(func() {
+	var err error
+	output, captureErr := captureOutput(func() {
 		err = selfUpdate(mockClient)
 	})
-	if err != nil {
-		t.Fatalf("Failed to capture output: %v", err)
+	if captureErr != nil {
+		t.Fatalf("Failed to capture output: %v", captureErr)
 	}
 
 	if err != nil {
@@ -2185,11 +2208,12 @@ func TestSelfUpdateURLErrorMessages(t *testing.T) {
 	responses := map[string]*http.Response{apiURL: resp403}
 	mockClient := createMockClient(responses, nil)
 
-	output, err := captureOutput(func() {
+	var err error
+	output, captureErr := captureOutput(func() {
 		err = selfUpdate(mockClient)
 	})
-	if err != nil {
-		t.Fatalf("Failed to capture output: %v", err)
+	if captureErr != nil {
+		t.Fatalf("Failed to capture output: %v", captureErr)
 	}
 
 	if err != nil {
