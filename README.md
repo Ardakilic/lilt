@@ -77,6 +77,7 @@ flac-converter <source_directory> [options]
 --copy-images        Copy JPG and PNG files
 --use-docker         Use Docker to run Sox instead of local installation
 --docker-image <img> Specify Docker image (default: ardakilic/sox_ng:latest)
+--self-update        Check for updates and self-update if newer version available
 ```
 
 ### Examples:
@@ -97,6 +98,11 @@ flac-converter.exe "C:\Music\MyAlbum" --target-dir "C:\Music\MyAlbum-16bit" --us
 
 # macOS/Linux
 ./flac-converter ~/Music/MyAlbum --target-dir ~/Music/MyAlbum-16bit --use-docker
+```
+
+Check for updates:
+```bash
+flac-converter --self-update
 ```
 
 ## Docker Support
@@ -139,12 +145,16 @@ Alternative Docker images you can use:
 
 ## Development
 
-### Requirements
+For detailed development information, including advanced build options, testing procedures, and contribution guidelines, see [Development.md](Development.md).
+
+### Quick Start
+
+#### Requirements
 
 - Go 1.24.5 or later
 - Make (optional, for convenience)
 
-### Building
+#### Building
 
 ```bash
 # Clone the repository
@@ -158,7 +168,7 @@ go build -o flac-converter .
 make build
 ```
 
-### Testing
+#### Testing
 
 ```bash
 # Run tests
@@ -168,38 +178,19 @@ go test -v ./...
 make test
 ```
 
-### Building for Different Platforms
+### Setting Version for Self-Update
+
+To enable the self-update feature, set the version during build:
 
 ```bash
-# Linux x64
-GOOS=linux GOARCH=amd64 go build -o flac-converter-linux-amd64 .
+# Set specific version
+go build -ldflags="-X main.version=v1.2.3" -o flac-converter .
 
-# Windows x64
-GOOS=windows GOARCH=amd64 go build -o flac-converter-windows-amd64.exe .
-
-# macOS ARM64 (Apple Silicon)
-GOOS=darwin GOARCH=arm64 go build -o flac-converter-darwin-arm64 .
-
-# Linux ARM64
-GOOS=linux GOARCH=arm64 go build -o flac-converter-linux-arm64 .
-
-# Build all platforms at once
-make build-all
+# Use git tags (recommended)
+make build  # Automatically uses git describe for versioning
 ```
 
-### Code Quality
-
-```bash
-# Format code
-go fmt ./...
-
-# Run linter (requires golangci-lint)
-golangci-lint run
-
-# Or use Make
-make fmt
-make lint
-```
+See [Development.md](Development.md) for detailed version management and build options.
 
 ### CI/CD
 
