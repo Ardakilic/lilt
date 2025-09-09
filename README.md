@@ -9,6 +9,7 @@ A cross-platform command-line tool that converts Hi-Res FLAC files to 16-bit FLA
   - 384kHz, 192kHz, or 96kHz → 48kHz
   - 88.2kHz → 44.1kHz
 - 🔄 Preserves existing 16-bit FLAC files without unnecessary conversion
+- 📝 Preserves ID3 tags and cover art from original FLAC files using FFmpeg (default: enabled)
 - 🎶 Copies MP3 files without modification
 - 🖼️ Optional: Copies JPG and PNG images from the source directory
 - 🐳 Docker support for containerized SoX execution
@@ -62,6 +63,10 @@ You can use this tool in one of two ways:
      - Install on Debian/Ubuntu: `sudo apt install sox`
      - Install on macOS: `brew install sox`
      - Install on Windows: Use WSL and install depending on the subsystem, or download SoX Windows binaries
+   - **FFmpeg** must be installed for metadata preservation. [FFmpeg Downloads](https://ffmpeg.org/download.html)
+     - Install on Debian/Ubuntu: `sudo apt install ffmpeg`
+     - Install on macOS: `brew install ffmpeg`
+     - Install on Windows: Download from official site or use package manager
    - You can also use SoX-NG: A drop-in replacement for SoX ([SoX-NG Project](https://codeberg.org/sox_ng/sox_ng/))
 
 ## Usage
@@ -75,6 +80,7 @@ flac-converter <source_directory> [options]
 ```
 --target-dir <dir>   Specify target directory (default: ./transcoded)
 --copy-images        Copy JPG and PNG files
+--preserve-metadata  Preserve ID3 tags and cover art using FFmpeg (default: true)
 --use-docker         Use Docker to run Sox instead of local installation
 --docker-image <img> Specify Docker image (default: ardakilic/sox_ng:latest)
 --self-update        Check for updates and self-update if newer version available
@@ -130,9 +136,10 @@ Alternative Docker images you can use:
 2. If a FLAC file is **24-bit**, it is converted to **16-bit** using SoX
 3. If a FLAC file has a sample rate of **96kHz, 192kHz, or 384kHz**, it is downsampled to **48kHz**
 4. If a FLAC file has a sample rate of **88.2kHz**, it is downsampled to **44.1kHz**
-5. MP3 files are copied without modification
-6. If `--copy-images` is enabled, `.jpg` and `.png` files are copied to the target directory
-7. The original folder structure is preserved in the target directory
+5. ID3 tags and cover art are preserved from source to converted FLAC files using FFmpeg
+6. MP3 files are copied without modification
+7. If `--copy-images` is enabled, `.jpg` and `.png` files are copied to the target directory
+8. The original folder structure is preserved in the target directory
 
 ## Technical Details
 

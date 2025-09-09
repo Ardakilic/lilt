@@ -22,12 +22,13 @@ import (
 
 // Config holds the application configuration
 type Config struct {
-	SourceDir   string
-	TargetDir   string
-	CopyImages  bool
-	UseDocker   bool
-	DockerImage string
-	SoxCommand  string
+	SourceDir       string
+	TargetDir       string
+	CopyImages      bool
+	UseDocker       bool
+	DockerImage     string
+	SoxCommand      string
+	PreserveMetadata bool
 }
 
 // AudioInfo holds information about an audio file
@@ -62,6 +63,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&config.CopyImages, "copy-images", false, "Copy JPG and PNG files")
 	rootCmd.Flags().BoolVar(&config.UseDocker, "use-docker", false, "Use Docker to run Sox instead of local installation")
 	rootCmd.Flags().StringVar(&config.DockerImage, "docker-image", "ardakilic/sox_ng:latest", "Specify Docker image")
+	rootCmd.Flags().BoolVar(&config.PreserveMetadata, "preserve-metadata", true, "Preserve ID3 tags and cover art using FFmpeg")
 	rootCmd.Flags().BoolVar(&selfUpdateFlag, "self-update", false, "Check for updates and self-update if newer version available")
 
 	// Set default values
@@ -144,6 +146,13 @@ func setupSoxCommand() error {
 		// Check if sox is installed locally
 		if _, err := exec.LookPath(config.SoxCommand); err != nil {
 			return fmt.Errorf("sox is not installed. Please install sox or use --use-docker option")
+		}
+
+		// Check for FFmpeg if preserving metadata in local mode
+		if config.PreserveMetadata {
+			if _, err := exec.LookPath("ffmpeg"); err != nil {
+				return fmt.Errorf("ffmpeg is not installed. Please install FFmpeg for metadata preservation or use --use-docker option")
+			}
 		}
 	}
 	return nil
@@ -284,11 +293,28 @@ func determineConversion(info *AudioInfo) (bool, []string, []string) {
 }
 
 func convertFlac(sourcePath, targetPath string, bitrateArgs, sampleRateArgs []string) error {
+	// Determine if conversion is actually needed (for metadata preservation logic)
+	needsConversion := len(bitrateArgs) > 0 || len(sampleRateArgs) > 3
+
+	if !needsConversion {
+		return copyFile(sourcePath, targetPath)
+	}
+
+	var tempPath string
+
+	if config.PreserveMetadata {
+		// Create temporary path for SoX output
+		tempPath = targetPath + ".tmp"
+	} else {
+		tempPath = targetPath
+	}
+
+	// Run SoX conversion to tempPath or targetPath
 	var cmd *exec.Cmd
 
 	if config.UseDocker {
 		dockerSource := getDockerPath(sourcePath)
-		dockerTarget := getDockerTargetPath(targetPath)
+		dockerTemp := getDockerTargetPath(tempPath)
 
 		args := []string{"run", "--rm",
 			"-v", fmt.Sprintf("%s:/source", config.SourceDir),
@@ -296,7 +322,7 @@ func convertFlac(sourcePath, targetPath string, bitrateArgs, sampleRateArgs []st
 			config.DockerImage, "--multi-threaded", "-G", dockerSource}
 
 		args = append(args, bitrateArgs...)
-		args = append(args, dockerTarget)
+		args = append(args, dockerTemp)
 		args = append(args, sampleRateArgs...)
 		args = append(args, "dither")
 
@@ -304,14 +330,36 @@ func convertFlac(sourcePath, targetPath string, bitrateArgs, sampleRateArgs []st
 	} else {
 		args := []string{"--multi-threaded", "-G", sourcePath}
 		args = append(args, bitrateArgs...)
-		args = append(args, targetPath)
+		args = append(args, tempPath)
 		args = append(args, sampleRateArgs...)
 		args = append(args, "dither")
 
 		cmd = exec.Command(config.SoxCommand, args...)
 	}
 
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		if config.PreserveMetadata && tempPath != "" {
+			defer os.Remove(tempPath) // Clean up temp on error
+		}
+		return fmt.Errorf("SoX conversion failed: %w", err)
+	}
+
+	if config.PreserveMetadata {
+		// Merge metadata using FFmpeg
+		if mergeErr := mergeMetadataWithFFmpeg(sourcePath, tempPath, targetPath); mergeErr != nil {
+			fmt.Printf("Warning: Metadata preservation failed for %s, keeping converted audio without tags: %v\n", targetPath, mergeErr)
+			// Fallback: rename temp to target
+			if renameErr := os.Rename(tempPath, targetPath); renameErr != nil {
+				return fmt.Errorf("fallback rename failed after metadata merge error: %w", renameErr)
+			}
+			return nil
+		}
+		// If merge succeeded, temp is already removed in merge function
+	} else {
+		// If not preserving metadata, tempPath == targetPath, no action needed
+	}
+
+	return nil
 }
 
 func getDockerPath(hostPath string) string {
@@ -322,6 +370,52 @@ func getDockerPath(hostPath string) string {
 func getDockerTargetPath(hostPath string) string {
 	relPath, _ := filepath.Rel(config.TargetDir, hostPath)
 	return filepath.ToSlash(filepath.Join("/target", relPath))
+}
+func mergeMetadataWithFFmpeg(sourcePath, tempConvertedPath, targetPath string) error {
+	if !config.PreserveMetadata {
+		// If not preserving metadata, just rename temp to target
+		return os.Rename(tempConvertedPath, targetPath)
+	}
+
+	var cmd *exec.Cmd
+
+	if config.UseDocker {
+		dockerSource := getDockerPath(sourcePath)
+		dockerTemp := getDockerTargetPath(tempConvertedPath)
+		dockerTarget := getDockerTargetPath(targetPath)
+
+		args := []string{"run", "--rm", "--entrypoint", "ffmpeg",
+			"-v", fmt.Sprintf("%s:/source", config.SourceDir),
+			"-v", fmt.Sprintf("%s:/target", config.TargetDir),
+			config.DockerImage,
+			"-i", dockerSource,
+			"-i", dockerTemp,
+			"-map", "1",
+			"-map_metadata", "0",
+			"-c", "copy",
+			dockerTarget}
+		cmd = exec.Command("docker", args...)
+	} else {
+		// Local FFmpeg
+		cmd = exec.Command("ffmpeg",
+			"-i", sourcePath,
+			"-i", tempConvertedPath,
+			"-map", "1",
+			"-map_metadata", "0",
+			"-c", "copy",
+			targetPath)
+	}
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("FFmpeg metadata merge failed: %w", err)
+	}
+
+	// Remove temp file after successful merge
+	if err := os.Remove(tempConvertedPath); err != nil {
+		fmt.Printf("Warning: Failed to remove temp file %s: %v\n", tempConvertedPath, err)
+	}
+
+	return nil
 }
 
 func copyImageFiles() error {
