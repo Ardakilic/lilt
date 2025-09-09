@@ -2775,3 +2775,83 @@ func TestSelfUpdateInvalidArchive(t *testing.T) {
 		t.Error("Expected extraction failure message")
 	}
 }
+
+func TestRunConverterEdge(t *testing.T) {
+	originalSelfUpdateFlag := selfUpdateFlag
+	defer func() { selfUpdateFlag = originalSelfUpdateFlag }()
+
+	originalConfig := config
+	defer func() { config = originalConfig }()
+
+	tmpDir, err := os.MkdirTemp("", "test-run-edge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	sourceDir := filepath.Join(tmpDir, "source")
+	os.MkdirAll(sourceDir, 0755)
+
+	t.Run("TargetDirCreationFail", func(t *testing.T) {
+		config.TargetDir = "/var/nonexistent/target"
+		config.UseDocker = false
+		config.SoxCommand = "true"
+		config.NoPreserveMetadata = true // Avoid FFmpeg error
+		err := runConverter(nil, []string{sourceDir})
+		if err == nil || !strings.Contains(err.Error(), "failed to create target directory") {
+			t.Errorf("Expected target dir creation error, got: %v", err)
+		}
+	})
+
+	t.Run("SelfUpdateWithArgs", func(t *testing.T) {
+		selfUpdateFlag = true
+		err := runConverter(nil, []string{sourceDir})
+		if err == nil || err.Error() != "--self-update does not take arguments" {
+			t.Errorf("Expected self-update with args error, got: %v", err)
+		}
+	})
+
+	t.Run("NoImages", func(t *testing.T) {
+		config.CopyImages = false
+		// Add a test image
+		jpgFile := filepath.Join(sourceDir, "test.jpg")
+		os.WriteFile(jpgFile, []byte("test"), 0644)
+		config.TargetDir = filepath.Join(tmpDir, "target-no-images")
+		err := runConverter(nil, []string{sourceDir})
+		if err != nil {
+			t.Logf("Run with no images: %v", err)
+		}
+		// Verify no image copied if flag false
+		if _, err := os.Stat(filepath.Join(config.TargetDir, "test.jpg")); !os.IsNotExist(err) {
+			t.Error("Image copied when flag false")
+		}
+	})
+}
+
+
+func TestMergeMetadataDocker(t *testing.T) {
+	originalConfig := config
+	defer func() { config = originalConfig }()
+
+	config.UseDocker = true
+	config.DockerImage = "test/ffmpeg"
+	config.SourceDir = "/host/source"
+	config.TargetDir = "/host/target"
+	config.NoPreserveMetadata = false
+
+	tmpDir, err := os.MkdirTemp("", "test-merge-docker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	sourcePath := filepath.Join(tmpDir, "source.flac")
+	tempPath := filepath.Join(tmpDir, "temp.flac")
+	targetPath := filepath.Join(tmpDir, "target.flac")
+
+	os.WriteFile(sourcePath, []byte("source"), 0644)
+	os.WriteFile(tempPath, []byte("temp"), 0644)
+
+	err = mergeMetadataWithFFmpeg(sourcePath, tempPath, targetPath)
+	t.Logf("Docker merge error expected: %v", err)
+}
