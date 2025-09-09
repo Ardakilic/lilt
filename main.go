@@ -363,13 +363,29 @@ func convertFlac(sourcePath, targetPath string, bitrateArgs, sampleRateArgs []st
 }
 
 func getDockerPath(hostPath string) string {
-	relPath, _ := filepath.Rel(config.SourceDir, hostPath)
-	return filepath.ToSlash(filepath.Join("/source", relPath))
+	relPath := normalizeForDocker(config.SourceDir, hostPath)
+	return filepath.Join("/source", relPath)
 }
 
 func getDockerTargetPath(hostPath string) string {
-	relPath, _ := filepath.Rel(config.TargetDir, hostPath)
-	return filepath.ToSlash(filepath.Join("/target", relPath))
+	relPath := normalizeForDocker(config.TargetDir, hostPath)
+	return filepath.Join("/target", relPath)
+}
+
+func normalizeForDocker(base, path string) string {
+	base = strings.ReplaceAll(base, "\\", "/")
+	path = strings.ReplaceAll(path, "\\", "/")
+	if strings.HasPrefix(base, "C:/") || strings.HasPrefix(base, "c:/") {
+		base = base[4:]
+	}
+	if strings.HasPrefix(path, "C:/") || strings.HasPrefix(path, "c:/") {
+		path = path[4:]
+	}
+	rel, err := filepath.Rel(base, path)
+	if err != nil {
+		return path // fallback
+	}
+	return filepath.ToSlash(rel)
 }
 func mergeMetadataWithFFmpeg(sourcePath, tempConvertedPath, targetPath string) error {
 	if config.NoPreserveMetadata {

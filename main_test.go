@@ -1150,28 +1150,6 @@ func TestCopyFileDestinationExists(t *testing.T) {
 	}
 }
 
-func TestCopyFileReadOnlySource(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "test-copy-readonly")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	srcPath := filepath.Join(tmpDir, "source.txt")
-	dstPath := filepath.Join(tmpDir, "dest.txt")
-
-	// Create source file
-	srcContent := "readonly content"
-	if err := os.WriteFile(srcPath, []byte(srcContent), 0444); err != nil {
-		t.Fatal(err)
-	}
-
-	// Copy should work even with read-only source
-	err = copyFile(srcPath, dstPath)
-	if err != nil {
-		t.Logf("copyFile with read-only source: %v", err)
-	}
-}
 
 func TestCopyImageFilesWithSubdirs(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "test-copy-images-subdirs")
@@ -1587,6 +1565,75 @@ func TestSelfUpdateHTTPError(t *testing.T) {
 	}
 	if !strings.Contains(output, "Please visit https://github.com/Ardakilic/flac-to-16bit-converter") {
 		t.Error("Expected fallback instructions in output")
+	}
+}
+
+func TestCopyFileReadOnlySource(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "test-copy-readonly")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	srcPath := filepath.Join(tmpDir, "source.txt")
+	dstPath := filepath.Join(tmpDir, "dest.txt")
+	srcContent := "test read-only content"
+
+	// Create source file with read-only permissions
+	if err := os.WriteFile(srcPath, []byte(srcContent), 0444); err != nil {
+		t.Fatalf("Failed to create source file: %v", err)
+	}
+
+	// Test copy operation
+	if err := copyFile(srcPath, dstPath); err != nil {
+		t.Fatalf("copyFile failed: %v", err)
+	}
+
+	// Verify destination content
+	dstContent, err := os.ReadFile(dstPath)
+	if err != nil {
+		t.Fatalf("Failed to read destination file: %v", err)
+	}
+	if string(dstContent) != srcContent {
+		t.Errorf("Content mismatch:\nExpected: %q\nGot: %q", srcContent, string(dstContent))
+	}
+
+	// Verify permissions
+	srcInfo, err := os.Stat(srcPath)
+	if err != nil {
+		t.Fatalf("Failed to stat source file: %v", err)
+	}
+	dstInfo, err := os.Stat(dstPath)
+	if err != nil {
+		t.Fatalf("Failed to stat destination file: %v", err)
+	}
+
+	// Check that at least read permissions are preserved
+	if dstInfo.Mode().Perm()&0444 != srcInfo.Mode().Perm()&0444 {
+		t.Errorf("Permissions not preserved properly:\nSource: %v\nDestination: %v",
+			srcInfo.Mode().Perm(), dstInfo.Mode().Perm())
+	}
+}
+
+func TestWindowsPathHandling(t *testing.T) {
+	originalConfig := config
+	defer func() { config = originalConfig }()
+	
+	config.UseDocker = true
+	config.SourceDir = `C:\Users\test\music`
+	config.TargetDir = `C:\Users\test\output`
+	
+	// Test path conversions
+	dockerPath := getDockerPath(`C:\Users\test\music\song.flac`)
+	expected := "/source/song.flac"
+	if dockerPath != expected {
+		t.Errorf("Windows path conversion failed. Expected: %s, Got: %s", expected, dockerPath)
+	}
+	
+	targetPath := getDockerTargetPath(`C:\Users\test\output\song.flac`)
+	expectedTarget := "/target/song.flac"
+	if targetPath != expectedTarget {
+		t.Errorf("Windows target path conversion failed. Expected: %s, Got: %s", expectedTarget, targetPath)
 	}
 }
 
@@ -2274,14 +2321,88 @@ func TestMergeMetadataWithFFmpegDocker(t *testing.T) {
 	tempPath := filepath.Join(tmpDir, "temp.flac")
 	targetPath := filepath.Join(tmpDir, "target.flac")
 
-	// Create dummy files
 	os.WriteFile(sourcePath, []byte("source"), 0644)
 	os.WriteFile(tempPath, []byte("temp"), 0644)
 
-	// Test Docker mode - this will fail since docker is not available, but it tests the Docker path
 	err = mergeMetadataWithFFmpeg(sourcePath, tempPath, targetPath)
 	if err == nil {
-		t.Logf("mergeMetadataWithFFmpeg with Docker succeeded unexpectedly")
+		t.Error("Expected Docker error but got nil")
+	}
+	
+	// Verify fallback to temp file rename
+	if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
+		t.Error("Target file should not exist after Docker failure in helper")
+	}
+}
+
+func TestMergeMetadataFFmpegFailure(t *testing.T) {
+	originalConfig := config
+	defer func() { config = originalConfig }()
+	
+	tmpDir, err := os.MkdirTemp("", "test-merge-failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+	
+	sourcePath := filepath.Join(tmpDir, "source.flac")
+	tempPath := filepath.Join(tmpDir, "temp.flac")
+	targetPath := filepath.Join(tmpDir, "target.flac")
+	
+	os.WriteFile(sourcePath, []byte("source"), 0644)
+	os.WriteFile(tempPath, []byte("temp"), 0644)
+	
+	// Force FFmpeg failure
+	config.NoPreserveMetadata = false
+	config.UseDocker = false
+	config.SoxCommand = "echo" // Invalid command
+	
+	err = mergeMetadataWithFFmpeg(sourcePath, tempPath, targetPath)
+	if err == nil {
+		t.Error("Expected FFmpeg error but got nil")
+	}
+	
+	// Verify temp file cleanup
+	if _, err := os.Stat(tempPath); os.IsNotExist(err) {
+		t.Error("Temp file should remain after FFmpeg failure in helper")
+	}
+}
+
+func TestDetermineConversionFullMatrix(t *testing.T) {
+	testCases := []struct {
+		name               string
+		input              AudioInfo
+		expectedConversion bool
+	}{
+		{
+			name:               "32-bit 44.1kHz",
+			input:              AudioInfo{Bits: 32, Rate: 44100},
+			expectedConversion: true,
+		},
+		{
+			name:               "16-bit 192kHz",
+			input:              AudioInfo{Bits: 16, Rate: 192000},
+			expectedConversion: true,
+		},
+		{
+			name:               "24-bit 48kHz",
+			input:              AudioInfo{Bits: 24, Rate: 48000},
+			expectedConversion: true,
+		},
+		{
+			name:               "16-bit 48kHz",
+			input:              AudioInfo{Bits: 16, Rate: 48000},
+			expectedConversion: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			needsConversion, _, _ := determineConversion(&tc.input)
+			if needsConversion != tc.expectedConversion {
+				t.Errorf("Expected conversion %v, got %v", tc.expectedConversion, needsConversion)
+			}
+		})
 	}
 }
 
@@ -2323,6 +2444,39 @@ func TestMergeMetadataWithFFmpegTempRemovalError(t *testing.T) {
 	// Verify target exists
 	if _, err := os.Stat(targetPath); os.IsNotExist(err) {
 		t.Error("Target file should exist after successful conversion with metadata")
+	}
+}
+
+func TestConvertFlacDockerFailure(t *testing.T) {
+	originalConfig := config
+	defer func() { config = originalConfig }()
+
+	tmpDir, err := os.MkdirTemp("", "test-convert-docker-fail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	sourcePath := filepath.Join(tmpDir, "source.flac")
+	targetPath := filepath.Join(tmpDir, "target.flac")
+	os.WriteFile(sourcePath, []byte("dummy flac"), 0644)
+
+	config.UseDocker = true
+	config.DockerImage = "invalid-image"
+	config.SourceDir = "/host/source"
+	config.TargetDir = "/host/target"
+
+	bitrateArgs := []string{"-b", "16"}
+	sampleRateArgs := []string{"rate", "-v", "-L", "44100"}
+
+	err = convertFlac(sourcePath, targetPath, bitrateArgs, sampleRateArgs)
+	if err == nil {
+		t.Error("Expected Docker failure but got nil")
+	}
+	
+	// Verify fallback copy
+	if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
+		t.Error("Target file should not exist after Docker sox failure in convertFlac")
 	}
 }
 
