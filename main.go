@@ -373,17 +373,35 @@ func getDockerTargetPath(hostPath string) string {
 }
 
 func normalizeForDocker(base, path string) string {
+	// Convert backslashes to forward slashes first
 	base = strings.ReplaceAll(base, "\\", "/")
 	path = strings.ReplaceAll(path, "\\", "/")
-	if strings.HasPrefix(base, "C:/") || strings.HasPrefix(base, "c:/") {
-		base = base[4:]
+	
+	// Try to use filepath.VolumeName
+	volBase := filepath.VolumeName(base)
+	baseStripped := base
+	if volBase != "" {
+		baseStripped = base[len(volBase):]
+	} else {
+		// Manual check for Windows drive letter (e.g., C:/ or c:/)
+		if len(base) >= 3 && base[1] == ':' && base[2] == '/' {
+			baseStripped = base[3:]
+		}
 	}
-	if strings.HasPrefix(path, "C:/") || strings.HasPrefix(path, "c:/") {
-		path = path[4:]
+	
+	volPath := filepath.VolumeName(path)
+	pathStripped := path
+	if volPath != "" {
+		pathStripped = path[len(volPath):]
+	} else {
+		if len(path) >= 3 && path[1] == ':' && path[2] == '/' {
+			pathStripped = path[3:]
+		}
 	}
-	rel, err := filepath.Rel(base, path)
+	
+	rel, err := filepath.Rel(baseStripped, pathStripped)
 	if err != nil {
-		return path // fallback
+		return filepath.ToSlash(pathStripped)
 	}
 	return filepath.ToSlash(rel)
 }
