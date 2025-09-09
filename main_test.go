@@ -9,12 +9,12 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
-	"os/exec"
 )
 
 // MockTransport is a simple mock for http.RoundTripper to simulate API responses
@@ -1150,7 +1150,6 @@ func TestCopyFileDestinationExists(t *testing.T) {
 	}
 }
 
-
 func TestCopyImageFilesWithSubdirs(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "test-copy-images-subdirs")
 	if err != nil {
@@ -1378,7 +1377,6 @@ func TestCopyFileLargeFile(t *testing.T) {
 	}
 }
 
-
 func TestGetDockerPath(t *testing.T) {
 	originalConfig := config
 	defer func() { config = originalConfig }()
@@ -1479,8 +1477,6 @@ func TestGetAudioInfo(t *testing.T) {
 		t.Logf("getAudioInfo succeeded unexpectedly with: %+v", info)
 	}
 }
-
-
 
 func TestRunConverter(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "test-run")
@@ -1618,18 +1614,18 @@ func TestCopyFileReadOnlySource(t *testing.T) {
 func TestWindowsPathHandling(t *testing.T) {
 	originalConfig := config
 	defer func() { config = originalConfig }()
-	
+
 	config.UseDocker = true
 	config.SourceDir = `C:\Users\test\music`
 	config.TargetDir = `C:\Users\test\output`
-	
+
 	// Test path conversions
 	dockerPath := getDockerPath(`C:\Users\test\music\song.flac`)
 	expected := "/source/song.flac"
 	if dockerPath != expected {
 		t.Errorf("Windows path conversion failed. Expected: %s, Got: %s", expected, dockerPath)
 	}
-	
+
 	targetPath := getDockerTargetPath(`C:\Users\test\output\song.flac`)
 	expectedTarget := "/target/song.flac"
 	if targetPath != expectedTarget {
@@ -2328,7 +2324,7 @@ func TestMergeMetadataWithFFmpegDocker(t *testing.T) {
 	if err == nil {
 		t.Error("Expected Docker error but got nil")
 	}
-	
+
 	// Verify fallback to temp file rename
 	if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
 		t.Error("Target file should not exist after Docker failure in helper")
@@ -2338,30 +2334,30 @@ func TestMergeMetadataWithFFmpegDocker(t *testing.T) {
 func TestMergeMetadataFFmpegFailure(t *testing.T) {
 	originalConfig := config
 	defer func() { config = originalConfig }()
-	
+
 	tmpDir, err := os.MkdirTemp("", "test-merge-failure")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer os.RemoveAll(tmpDir)
-	
+
 	sourcePath := filepath.Join(tmpDir, "source.flac")
 	tempPath := filepath.Join(tmpDir, "temp.flac")
 	targetPath := filepath.Join(tmpDir, "target.flac")
-	
+
 	os.WriteFile(sourcePath, []byte("source"), 0644)
 	os.WriteFile(tempPath, []byte("temp"), 0644)
-	
+
 	// Force FFmpeg failure
 	config.NoPreserveMetadata = false
 	config.UseDocker = false
 	config.SoxCommand = "echo" // Invalid command
-	
+
 	err = mergeMetadataWithFFmpeg(sourcePath, tempPath, targetPath)
 	if err == nil {
 		t.Error("Expected FFmpeg error but got nil")
 	}
-	
+
 	// Verify temp file cleanup
 	if _, err := os.Stat(tempPath); os.IsNotExist(err) {
 		t.Error("Temp file should remain after FFmpeg failure in helper")
@@ -2473,7 +2469,7 @@ func TestConvertFlacDockerFailure(t *testing.T) {
 	if err == nil {
 		t.Error("Expected Docker failure but got nil")
 	}
-	
+
 	// Verify fallback copy
 	if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
 		t.Error("Target file should not exist after Docker sox failure in convertFlac")
@@ -2539,19 +2535,19 @@ func TestConvertFlacNoConversionWithMetadata(t *testing.T) {
 	if err != nil {
 		t.Errorf("Expected no error for no conversion, got: %v", err)
 	}
-// Verify copied
-if _, err := os.Stat(targetPath); os.IsNotExist(err) {
-	t.Error("Target should be copy of source")
-}
+	// Verify copied
+	if _, err := os.Stat(targetPath); os.IsNotExist(err) {
+		t.Error("Target should be copy of source")
+	}
 }
 
 func TestMainFunction(t *testing.T) {
-// This test just ensures the main function exists and can be called
-// We can't easily test the actual execution without more complex setup
-// but we can at least ensure it compiles and doesn't panic immediately
-if rootCmd == nil {
-	t.Error("rootCmd should be initialized")
-}
+	// This test just ensures the main function exists and can be called
+	// We can't easily test the actual execution without more complex setup
+	// but we can at least ensure it compiles and doesn't panic immediately
+	if rootCmd == nil {
+		t.Error("rootCmd should be initialized")
+	}
 }
 
 func TestSetupSoxCommand(t *testing.T) {
@@ -2630,7 +2626,7 @@ func TestProcessAudioFiles(t *testing.T) {
 	config.SourceDir = sourceDir
 	config.TargetDir = targetDir
 	config.UseDocker = false
-	config.SoxCommand = "true" // Mock success
+	config.SoxCommand = "true"       // Mock success
 	config.NoPreserveMetadata = true // Simplify, no FFmpeg
 
 	err = processAudioFiles()
@@ -2790,7 +2786,7 @@ func TestSelfUpdateFullFlow(t *testing.T) {
 		Body:       io.NopCloser(strings.NewReader(respBody)),
 		Header:     make(http.Header),
 	}
-	
+
 	// Mock asset download with dummy zip (for windows) or tar.gz (for linux/darwin)
 	goos := runtime.GOOS
 	goarch := runtime.GOARCH
@@ -2822,7 +2818,7 @@ func TestSelfUpdateFullFlow(t *testing.T) {
 		gw.Close()
 		dummyArchive = buf.Bytes()
 	}
-	
+
 	assetResp := &http.Response{
 		StatusCode: http.StatusOK,
 		Body:       io.NopCloser(bytes.NewReader(dummyArchive)),
@@ -2981,7 +2977,6 @@ func TestRunConverterEdge(t *testing.T) {
 		}
 	})
 }
-
 
 func TestMergeMetadataDocker(t *testing.T) {
 	originalConfig := config

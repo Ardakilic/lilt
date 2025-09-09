@@ -22,12 +22,12 @@ import (
 
 // Config holds the application configuration
 type Config struct {
-	SourceDir       string
-	TargetDir       string
-	CopyImages      bool
-	UseDocker       bool
-	DockerImage     string
-	SoxCommand      string
+	SourceDir          string
+	TargetDir          string
+	CopyImages         bool
+	UseDocker          bool
+	DockerImage        string
+	SoxCommand         string
 	NoPreserveMetadata bool
 }
 
