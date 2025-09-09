@@ -56,7 +56,7 @@ You can use this tool in one of two ways:
 1. **Using Docker (recommended)**:
    - Docker must be installed on your system
    - No local SoX installation required
-   - Uses `ardakilic/sox_ng:latest` by default
+   - Uses [`ardakilic/sox_ng:latest`](https://hub.docker.com/r/ardakilic/sox_ng) by default, which includes both sox_ng and FFmpeg.
 
 2. **Using Local SoX Installation**:
    - **SoX (Sound eXchange)** must be installed. [SoX Project](http://sox.sourceforge.net/)
