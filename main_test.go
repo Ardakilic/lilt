@@ -1400,30 +1400,6 @@ func TestCopyFileLargeFile(t *testing.T) {
 	}
 }
 
-func TestSetupSoxCommand(t *testing.T) {
-	// Test without Docker - this will fail if sox is not installed, but tests the logic
-	originalConfig := config
-	defer func() { config = originalConfig }()
-
-	config.UseDocker = false
-	config.SoxCommand = "sox"
-
-	err := setupSoxCommand()
-	// We can't easily mock exec.LookPath, so we'll just test that it doesn't panic
-	// In a real environment with sox installed, this would pass
-	if err != nil && err.Error() != "sox is not installed. Please install sox or use --use-docker option" {
-		t.Logf("setupSoxCommand returned: %v", err)
-	}
-
-	// Test with Docker - similar limitation
-	config.UseDocker = true
-	config.DockerImage = "test/image"
-
-	err = setupSoxCommand()
-	if err != nil && err.Error() != "docker is not installed. Please install Docker to use this option" {
-		t.Logf("setupSoxCommand with docker returned: %v", err)
-	}
-}
 
 func TestGetDockerPath(t *testing.T) {
 	originalConfig := config
@@ -1526,73 +1502,7 @@ func TestGetAudioInfo(t *testing.T) {
 	}
 }
 
-func TestConvertFlac(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "test-convert")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tmpDir)
 
-	sourceFile := filepath.Join(tmpDir, "source.flac")
-	targetFile := filepath.Join(tmpDir, "target.flac")
-
-	os.WriteFile(sourceFile, []byte("dummy flac"), 0644)
-
-	// Test with local sox - this will fail if sox is not available, but tests the function structure
-	originalConfig := config
-	defer func() { config = originalConfig }()
-
-	config.UseDocker = false
-	config.SoxCommand = "true" // Use true command which always succeeds
-
-	bitrateArgs := []string{"-b", "16"}
-	sampleRateArgs := []string{"rate", "-v", "-L", "44100"}
-
-	err = convertFlac(sourceFile, targetFile, bitrateArgs, sampleRateArgs)
-	// We expect this to succeed with 'true' command
-	if err != nil {
-		t.Logf("convertFlac failed: %v", err)
-	}
-}
-
-func TestProcessAudioFiles(t *testing.T) {
-	tmpDir, err := os.MkdirTemp("", "test-process")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tmpDir)
-
-	sourceDir := filepath.Join(tmpDir, "source")
-	targetDir := filepath.Join(tmpDir, "target")
-
-	os.MkdirAll(filepath.Join(sourceDir, "subdir"), 0755)
-	os.MkdirAll(targetDir, 0755)
-
-	// Create test files
-	flacFile := filepath.Join(sourceDir, "test.flac")
-	mp3File := filepath.Join(sourceDir, "test.mp3")
-	os.WriteFile(flacFile, []byte("dummy flac"), 0644)
-	os.WriteFile(mp3File, []byte("dummy mp3"), 0644)
-
-	// Set config
-	originalConfig := config
-	defer func() { config = originalConfig }()
-	config.SourceDir = sourceDir
-	config.TargetDir = targetDir
-	config.UseDocker = false
-	config.SoxCommand = "true"
-
-	// Test the function - it will try to call sox/true which should succeed for MP3 copy
-	err = processAudioFiles()
-	if err != nil {
-		t.Logf("processAudioFiles failed: %v", err)
-	}
-
-	// Verify MP3 file was copied (FLAC conversion may fail without real sox)
-	if _, err := os.Stat(filepath.Join(targetDir, "test.mp3")); os.IsNotExist(err) {
-		t.Error("MP3 file was not processed")
-	}
-}
 
 func TestRunConverter(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "test-run")
@@ -2344,7 +2254,38 @@ func TestMergeMetadataWithFFmpegLocalFailure(t *testing.T) {
 	}
 }
 
-func TestConvertFlacWithMetadataPreservationSuccess(t *testing.T) {
+func TestMergeMetadataWithFFmpegDocker(t *testing.T) {
+	originalConfig := config
+	defer func() { config = originalConfig }()
+
+	config.NoPreserveMetadata = false
+	config.UseDocker = true
+	config.DockerImage = "test/ffmpeg"
+	config.SourceDir = "/host/source"
+	config.TargetDir = "/host/target"
+
+	tmpDir, err := os.MkdirTemp("", "test-merge-docker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	sourcePath := filepath.Join(tmpDir, "source.flac")
+	tempPath := filepath.Join(tmpDir, "temp.flac")
+	targetPath := filepath.Join(tmpDir, "target.flac")
+
+	// Create dummy files
+	os.WriteFile(sourcePath, []byte("source"), 0644)
+	os.WriteFile(tempPath, []byte("temp"), 0644)
+
+	// Test Docker mode - this will fail since docker is not available, but it tests the Docker path
+	err = mergeMetadataWithFFmpeg(sourcePath, tempPath, targetPath)
+	if err == nil {
+		t.Logf("mergeMetadataWithFFmpeg with Docker succeeded unexpectedly")
+	}
+}
+
+func TestMergeMetadataWithFFmpegTempRemovalError(t *testing.T) {
 	originalConfig := config
 	defer func() { config = originalConfig }()
 
@@ -2444,9 +2385,393 @@ func TestConvertFlacNoConversionWithMetadata(t *testing.T) {
 	if err != nil {
 		t.Errorf("Expected no error for no conversion, got: %v", err)
 	}
+// Verify copied
+if _, err := os.Stat(targetPath); os.IsNotExist(err) {
+	t.Error("Target should be copy of source")
+}
+}
 
-	// Verify copied
-	if _, err := os.Stat(targetPath); os.IsNotExist(err) {
-		t.Error("Target should be copy of source")
+func TestMainFunction(t *testing.T) {
+// This test just ensures the main function exists and can be called
+// We can't easily test the actual execution without more complex setup
+// but we can at least ensure it compiles and doesn't panic immediately
+if rootCmd == nil {
+	t.Error("rootCmd should be initialized")
+}
+}
+
+func TestSetupSoxCommand(t *testing.T) {
+	originalConfig := config
+	defer func() { config = originalConfig }()
+
+	t.Run("LocalSoxMissing", func(t *testing.T) {
+		config.UseDocker = false
+		config.SoxCommand = "nonexistent-sox"
+		err := setupSoxCommand()
+		if err == nil || !strings.Contains(err.Error(), "sox is not installed") {
+			t.Errorf("Expected sox missing error, got: %v", err)
+		}
+	})
+
+	t.Run("LocalFFmpegMissing", func(t *testing.T) {
+		config.UseDocker = false
+		config.NoPreserveMetadata = false
+		config.SoxCommand = "true" // Assume sox success for this test
+		err := setupSoxCommand()
+		if err == nil || !strings.Contains(err.Error(), "ffmpeg is not installed") {
+			t.Logf("FFmpeg may be installed, but expected missing error (or sox issue): %v", err)
+		}
+	})
+
+	t.Run("DockerMissing", func(t *testing.T) {
+		config.UseDocker = true
+		config.SourceDir = "/tmp/source"
+		config.TargetDir = "/tmp/target"
+		err := setupSoxCommand()
+		if err == nil {
+			t.Log("Docker available, no error")
+		} else if !strings.Contains(err.Error(), "docker is not installed") {
+			t.Errorf("Expected docker missing error or no error, got: %v", err)
+		}
+	})
+
+	t.Run("DockerPaths", func(t *testing.T) {
+		config.UseDocker = true
+		config.SourceDir = "."
+		config.TargetDir = "./target"
+		// Will fail on LookPath, but covers abs path calls
+		err := setupSoxCommand()
+		t.Logf("Docker path setup error (expected if no docker): %v", err)
+	})
+}
+
+func TestProcessAudioFiles(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "test-process-audio")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	sourceDir := filepath.Join(tmpDir, "source")
+	targetDir := filepath.Join(tmpDir, "target")
+
+	os.MkdirAll(sourceDir, 0755)
+	os.MkdirAll(targetDir, 0755)
+
+	// Create FLAC and MP3 files
+	flacFile := filepath.Join(sourceDir, "test.flac")
+	mp3File := filepath.Join(sourceDir, "test.mp3")
+	os.WriteFile(flacFile, []byte("dummy flac"), 0644)
+	os.WriteFile(mp3File, []byte("dummy mp3"), 0644)
+
+	// Subdir test
+	subdir := filepath.Join(sourceDir, "subdir")
+	os.MkdirAll(subdir, 0755)
+	subFlac := filepath.Join(subdir, "sub.flac")
+	os.WriteFile(subFlac, []byte("dummy sub flac"), 0644)
+
+	originalConfig := config
+	defer func() { config = originalConfig }()
+
+	config.SourceDir = sourceDir
+	config.TargetDir = targetDir
+	config.UseDocker = false
+	config.SoxCommand = "true" // Mock success
+	config.NoPreserveMetadata = true // Simplify, no FFmpeg
+
+	err = processAudioFiles()
+	if err != nil {
+		t.Logf("processAudioFiles error (expected if no sox): %v", err)
+	}
+
+	// Verify files processed
+	if _, err := os.Stat(filepath.Join(targetDir, "test.flac")); os.IsNotExist(err) {
+		t.Error("Root FLAC not processed")
+	}
+	if _, err := os.Stat(filepath.Join(targetDir, "test.mp3")); os.IsNotExist(err) {
+		t.Error("Root MP3 not copied")
+	}
+	if _, err := os.Stat(filepath.Join(targetDir, "subdir", "sub.flac")); os.IsNotExist(err) {
+		t.Error("Subdir FLAC not processed")
+	}
+
+	// Test with failing sox for fallback copy
+	config.SoxCommand = "false"
+	err = processAudioFiles()
+	// Should fallback copy on error
+	if _, err := os.Stat(filepath.Join(targetDir, "test.flac")); os.IsNotExist(err) {
+		t.Error("Fallback copy failed on sox error")
+	}
+
+	// Test non-audio file skip
+	nonAudio := filepath.Join(sourceDir, "test.txt")
+	os.WriteFile(nonAudio, []byte("dummy text"), 0644)
+	err = processAudioFiles()
+	if err != nil {
+		t.Logf("processAudioFiles with non-audio: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(targetDir, "test.txt")); !os.IsNotExist(err) {
+		t.Error("Non-audio file was incorrectly processed")
+	}
+}
+
+func TestConvertFlac(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "test-convert-flac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	sourcePath := filepath.Join(tmpDir, "source.flac")
+	targetPath := filepath.Join(tmpDir, "target.flac")
+	os.WriteFile(sourcePath, []byte("dummy source"), 0644)
+
+	originalConfig := config
+	defer func() { config = originalConfig }()
+
+	t.Run("NoConversionCopy", func(t *testing.T) {
+		config.UseDocker = false
+		config.SoxCommand = "true"
+		config.NoPreserveMetadata = true
+		bitrateArgs := []string{}
+		sampleRateArgs := []string{"rate", "-v", "-L"}
+		err := convertFlac(sourcePath, targetPath, bitrateArgs, sampleRateArgs)
+		if err != nil {
+			t.Errorf("Expected no error for no conversion, got: %v", err)
+		}
+		if _, err := os.Stat(targetPath); os.IsNotExist(err) {
+			t.Error("Target should exist after copy")
+		}
+	})
+
+	t.Run("BitrateConversion", func(t *testing.T) {
+		config.UseDocker = false
+		config.SoxCommand = "true"
+		config.NoPreserveMetadata = true
+		bitrateArgs := []string{"-b", "16"}
+		sampleRateArgs := []string{"rate", "-v", "-L"}
+		err := convertFlac(sourcePath, targetPath, bitrateArgs, sampleRateArgs)
+		if err != nil {
+			t.Logf("Conversion error (if no sox): %v", err)
+		}
+	})
+
+	t.Run("SampleRateConversion", func(t *testing.T) {
+		config.UseDocker = false
+		config.SoxCommand = "true"
+		config.NoPreserveMetadata = true
+		bitrateArgs := []string{}
+		sampleRateArgs := []string{"rate", "-v", "-L", "44100"}
+		err := convertFlac(sourcePath, targetPath, bitrateArgs, sampleRateArgs)
+		if err != nil {
+			t.Logf("Conversion error (if no sox): %v", err)
+		}
+	})
+
+	t.Run("MetadataPreserveSuccess", func(t *testing.T) {
+		config.UseDocker = false
+		config.NoPreserveMetadata = false
+		config.SoxCommand = "true"
+		// Assume FFmpeg available or test fallback
+		bitrateArgs := []string{"-b", "16"}
+		sampleRateArgs := []string{"rate", "-v", "-L", "44100"}
+		err := convertFlac(sourcePath, targetPath, bitrateArgs, sampleRateArgs)
+		if err != nil {
+			t.Logf("Metadata preserve error (if no ffmpeg): %v", err)
+		}
+	})
+
+	t.Run("MetadataPreserveFailFallback", func(t *testing.T) {
+		config.UseDocker = false
+		config.NoPreserveMetadata = false
+		config.SoxCommand = "true"
+		// If FFmpeg fails, fallback rename
+		bitrateArgs := []string{"-b", "16"}
+		sampleRateArgs := []string{"rate", "-v", "-L", "44100"}
+		err := convertFlac(sourcePath, targetPath, bitrateArgs, sampleRateArgs)
+		if err != nil {
+			t.Logf("Expected fallback on metadata fail: %v", err)
+		}
+		if _, err := os.Stat(targetPath); os.IsNotExist(err) {
+			t.Error("Target should exist after fallback")
+		}
+	})
+
+	t.Run("DockerConversion", func(t *testing.T) {
+		config.UseDocker = true
+		config.DockerImage = "test/sox"
+		config.SourceDir = tmpDir
+		config.TargetDir = tmpDir
+		bitrateArgs := []string{"-b", "16"}
+		sampleRateArgs := []string{"rate", "-v", "-L", "44100"}
+		err := convertFlac(sourcePath, targetPath, bitrateArgs, sampleRateArgs)
+		if err == nil {
+			t.Logf("Docker conversion succeeded unexpectedly")
+		}
+	})
+
+	t.Run("SoxFailureFallback", func(t *testing.T) {
+		config.UseDocker = false
+		config.SoxCommand = "false" // Fail
+		config.NoPreserveMetadata = true
+		bitrateArgs := []string{"-b", "16"}
+		sampleRateArgs := []string{"rate", "-v", "-L", "44100"}
+		err := convertFlac(sourcePath, targetPath, bitrateArgs, sampleRateArgs)
+		if err == nil {
+			t.Error("Expected error on sox failure")
+		}
+	})
+}
+
+func TestSelfUpdateFullFlow(t *testing.T) {
+	originalVersion := version
+	version = "v1.0.0"
+	defer func() { version = originalVersion }()
+
+	// Mock API success with newer version
+	apiURL := "https://api.github.com/repos/Ardakilic/flac-to-16bit-converter/releases/latest"
+	respBody := `{"tag_name": "v1.1.0"}`
+	apiResp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(respBody)),
+		Header:     make(http.Header),
+	}
+	
+	// Mock asset download with dummy zip (for windows) or tar.gz (for linux/darwin)
+	goos := runtime.GOOS
+	goarch := runtime.GOARCH
+	var assetURL string
+	var dummyArchive []byte
+	if goos == "windows" {
+		assetURL = fmt.Sprintf("https://github.com/Ardakilic/flac-to-16bit-converter/releases/download/v1.1.0/flac-converter-%s-%s.exe.zip", goos, goarch)
+		// Dummy zip with exe
+		buf := new(bytes.Buffer)
+		zw := zip.NewWriter(buf)
+		f, _ := zw.Create("flac-converter-windows-amd64.exe")
+		f.Write([]byte("dummy exe"))
+		zw.Close()
+		dummyArchive = buf.Bytes()
+	} else {
+		assetURL = fmt.Sprintf("https://github.com/Ardakilic/flac-to-16bit-converter/releases/download/v1.1.0/flac-converter-%s-%s.tar.gz", goos, goarch)
+		// Dummy tar.gz
+		buf := new(bytes.Buffer)
+		gw := gzip.NewWriter(buf)
+		tw := tar.NewWriter(gw)
+		header := &tar.Header{
+			Name: "flac-converter-linux-amd64",
+			Mode: 0755,
+			Size: 9,
+		}
+		tw.WriteHeader(header)
+		tw.Write([]byte("dummy binary"))
+		tw.Close()
+		gw.Close()
+		dummyArchive = buf.Bytes()
+	}
+	
+	assetResp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(bytes.NewReader(dummyArchive)),
+		Header:     make(http.Header),
+	}
+	responses := map[string]*http.Response{apiURL: apiResp, assetURL: assetResp}
+	mockClient := createMockClient(responses, nil)
+
+	var err error
+	output, captureErr := captureOutput(func() {
+		err = selfUpdate(mockClient)
+	})
+	if captureErr != nil {
+		t.Fatalf("Failed to capture output: %v", captureErr)
+	}
+
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	if !strings.Contains(output, "New version v1.1.0 available. Updating...") {
+		t.Error("Expected update trigger message")
+	}
+	if strings.Contains(output, "Update complete. Please restart the application.") {
+		t.Log("Full update succeeded")
+	} else {
+		t.Logf("Update flow covered up to extraction/replacement, output: %s", output)
+	}
+}
+
+func TestSelfUpdateAPI404(t *testing.T) {
+	originalVersion := version
+	version = "v1.0.0"
+	defer func() { version = originalVersion }()
+
+	apiURL := "https://api.github.com/repos/Ardakilic/flac-to-16bit-converter/releases/latest"
+	resp404 := &http.Response{
+		StatusCode: http.StatusNotFound,
+		Body:       io.NopCloser(strings.NewReader("Not Found")),
+		Header:     make(http.Header),
+	}
+	responses := map[string]*http.Response{apiURL: resp404}
+	mockClient := createMockClient(responses, nil)
+
+	var err error
+	output, captureErr := captureOutput(func() {
+		err = selfUpdate(mockClient)
+	})
+	if captureErr != nil {
+		t.Fatalf("Failed to capture output: %v", captureErr)
+	}
+
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+
+	if !strings.Contains(output, "Failed to fetch release info") {
+		t.Error("Expected 404 message")
+	}
+	if !strings.Contains(output, "HTTP 404") {
+		t.Error("Expected status code in output")
+	}
+}
+
+func TestSelfUpdateInvalidArchive(t *testing.T) {
+	originalVersion := version
+	version = "v1.0.0"
+	defer func() { version = originalVersion }()
+
+	goos := runtime.GOOS
+	goarch := runtime.GOARCH
+
+	apiURL := "https://api.github.com/repos/Ardakilic/flac-to-16bit-converter/releases/latest"
+	respBody := `{"tag_name": "v1.1.0"}`
+	apiResp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(respBody)),
+		Header:     make(http.Header),
+	}
+
+	assetURL := fmt.Sprintf("https://github.com/Ardakilic/flac-to-16bit-converter/releases/download/v1.1.0/flac-converter-%s-%s.tar.gz", goos, goarch)
+	assetResp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader("invalid archive data")),
+		Header:     make(http.Header),
+	}
+	responses := map[string]*http.Response{apiURL: apiResp, assetURL: assetResp}
+	mockClient := createMockClient(responses, nil)
+
+	var err error
+	output, captureErr := captureOutput(func() {
+		err = selfUpdate(mockClient)
+	})
+	if captureErr != nil {
+		t.Fatalf("Failed to capture output: %v", captureErr)
+	}
+
+	if err != nil {
+		t.Logf("Error on invalid archive (expected): %v", err)
+	}
+
+	if !strings.Contains(output, "Failed to extract") && !strings.Contains(output, "Failed to open") && !strings.Contains(output, "Failed to read") {
+		t.Logf("Output: %s", output)
+		t.Error("Expected extraction failure message")
 	}
 }
