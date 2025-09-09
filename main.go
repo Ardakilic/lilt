@@ -28,7 +28,7 @@ type Config struct {
 	UseDocker       bool
 	DockerImage     string
 	SoxCommand      string
-	PreserveMetadata bool
+	NoPreserveMetadata bool
 }
 
 // AudioInfo holds information about an audio file
@@ -63,7 +63,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&config.CopyImages, "copy-images", false, "Copy JPG and PNG files")
 	rootCmd.Flags().BoolVar(&config.UseDocker, "use-docker", false, "Use Docker to run Sox instead of local installation")
 	rootCmd.Flags().StringVar(&config.DockerImage, "docker-image", "ardakilic/sox_ng:latest", "Specify Docker image")
-	rootCmd.Flags().BoolVar(&config.PreserveMetadata, "preserve-metadata", true, "Preserve ID3 tags and cover art using FFmpeg")
+	rootCmd.Flags().BoolVar(&config.NoPreserveMetadata, "no-preserve-metadata", false, "Do not preserve ID3 tags and cover art using FFmpeg (default: false, preserves by default)")
 	rootCmd.Flags().BoolVar(&selfUpdateFlag, "self-update", false, "Check for updates and self-update if newer version available")
 
 	// Set default values
@@ -149,7 +149,7 @@ func setupSoxCommand() error {
 		}
 
 		// Check for FFmpeg if preserving metadata in local mode
-		if config.PreserveMetadata {
+		if !config.NoPreserveMetadata {
 			if _, err := exec.LookPath("ffmpeg"); err != nil {
 				return fmt.Errorf("ffmpeg is not installed. Please install FFmpeg for metadata preservation or use --use-docker option")
 			}
@@ -302,7 +302,7 @@ func convertFlac(sourcePath, targetPath string, bitrateArgs, sampleRateArgs []st
 
 	var tempPath string
 
-	if config.PreserveMetadata {
+	if !config.NoPreserveMetadata {
 		// Create temporary path for SoX output
 		tempPath = targetPath + ".tmp"
 	} else {
@@ -338,13 +338,13 @@ func convertFlac(sourcePath, targetPath string, bitrateArgs, sampleRateArgs []st
 	}
 
 	if err := cmd.Run(); err != nil {
-		if config.PreserveMetadata && tempPath != "" {
+		if !config.NoPreserveMetadata && tempPath != "" {
 			defer os.Remove(tempPath) // Clean up temp on error
 		}
 		return fmt.Errorf("SoX conversion failed: %w", err)
 	}
 
-	if config.PreserveMetadata {
+	if !config.NoPreserveMetadata {
 		// Merge metadata using FFmpeg
 		if mergeErr := mergeMetadataWithFFmpeg(sourcePath, tempPath, targetPath); mergeErr != nil {
 			fmt.Printf("Warning: Metadata preservation failed for %s, keeping converted audio without tags: %v\n", targetPath, mergeErr)
@@ -372,7 +372,7 @@ func getDockerTargetPath(hostPath string) string {
 	return filepath.ToSlash(filepath.Join("/target", relPath))
 }
 func mergeMetadataWithFFmpeg(sourcePath, tempConvertedPath, targetPath string) error {
-	if !config.PreserveMetadata {
+	if config.NoPreserveMetadata {
 		// If not preserving metadata, just rename temp to target
 		return os.Rename(tempConvertedPath, targetPath)
 	}
