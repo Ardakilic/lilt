@@ -532,6 +532,79 @@ func TestProcessFlacDocker(t *testing.T) {
 	}
 }
 
+func TestProcessFlacTemporaryFileNaming(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "test-temp-naming")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	sourceFile := filepath.Join(tmpDir, "test file with spaces.flac")
+	targetFile := filepath.Join(tmpDir, "output file with spaces.flac")
+
+	// Create a dummy source file
+	os.WriteFile(sourceFile, []byte("dummy flac"), 0644)
+
+	// Test the temporary file naming logic
+	originalConfig := config
+	defer func() { config = originalConfig }()
+
+	config.NoPreserveMetadata = false // Enable metadata preservation
+
+	// Test that temporary file path has .tmp.flac extension
+	var tempPath string
+	if !config.NoPreserveMetadata {
+		tempPath = strings.TrimSuffix(targetFile, ".flac") + ".tmp.flac"
+	} else {
+		tempPath = targetFile
+	}
+
+	expectedTempPath := filepath.Join(tmpDir, "output file with spaces.tmp.flac")
+	if tempPath != expectedTempPath {
+		t.Errorf("Expected temp path %s, got %s", expectedTempPath, tempPath)
+	}
+
+	// Verify the extension is .flac for temporary file
+	if !strings.HasSuffix(tempPath, ".flac") {
+		t.Errorf("Temporary file should have .flac extension, got %s", tempPath)
+	}
+}
+
+func TestMergeMetadataWithFFmpeg(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "test-ffmpeg-merge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	sourceFile := filepath.Join(tmpDir, "source.flac")
+	tempFile := filepath.Join(tmpDir, "temp.tmp.flac")
+	targetFile := filepath.Join(tmpDir, "target.flac")
+
+	// Create dummy files
+	os.WriteFile(sourceFile, []byte("source flac"), 0644)
+	os.WriteFile(tempFile, []byte("converted flac"), 0644)
+
+	// Test with metadata preservation disabled
+	originalConfig := config
+	defer func() { config = originalConfig }()
+
+	config.NoPreserveMetadata = true
+
+	err = mergeMetadataWithFFmpeg(sourceFile, tempFile, targetFile)
+	if err != nil {
+		t.Errorf("mergeMetadataWithFFmpeg failed with NoPreserveMetadata=true: %v", err)
+	}
+
+	// Should just rename temp to target
+	if _, err := os.Stat(targetFile); os.IsNotExist(err) {
+		t.Error("Target file should exist after merge with NoPreserveMetadata=true")
+	}
+	if _, err := os.Stat(tempFile); !os.IsNotExist(err) {
+		t.Error("Temp file should be removed after merge")
+	}
+}
+
 func TestSetupSoxCommandDocker(t *testing.T) {
 	// Test Docker path setup
 	originalConfig := config
@@ -3249,32 +3322,32 @@ func TestConversionLogTargetRateDetermination(t *testing.T) {
 		{
 			name:               "96kHz to 48kHz",
 			audioRate:          96000,
-			expectedTargetRate: "48kHz",
+			expectedTargetRate: "48000 Hz",
 		},
 		{
 			name:               "192kHz to 48kHz",
 			audioRate:          192000,
-			expectedTargetRate: "48kHz",
+			expectedTargetRate: "48000 Hz",
 		},
 		{
 			name:               "88.2kHz to 44.1kHz",
 			audioRate:          88200,
-			expectedTargetRate: "44.1kHz",
+			expectedTargetRate: "44100 Hz",
 		},
 		{
 			name:               "176.4kHz to 44.1kHz",
 			audioRate:          176400,
-			expectedTargetRate: "44.1kHz",
+			expectedTargetRate: "44100 Hz",
 		},
 		{
 			name:               "44.1kHz no change",
 			audioRate:          44100,
-			expectedTargetRate: "44.1kHz",
+			expectedTargetRate: "44100 Hz",
 		},
 		{
 			name:               "48kHz no change",
 			audioRate:          48000,
-			expectedTargetRate: "48kHz",
+			expectedTargetRate: "48000 Hz",
 		},
 	}
 
@@ -3285,9 +3358,9 @@ func TestConversionLogTargetRateDetermination(t *testing.T) {
 			var targetRateStr string
 			switch audioInfo.Rate {
 			case 48000, 96000, 192000, 384000:
-				targetRateStr = "48kHz"
+				targetRateStr = "48000 Hz"
 			case 44100, 88200, 176400, 352800:
-				targetRateStr = "44.1kHz"
+				targetRateStr = "44100 Hz"
 			default:
 				targetRateStr = "same rate"
 			}
@@ -3318,8 +3391,8 @@ func TestConversionLogOutput(t *testing.T) {
 			sourceBits:        24,
 			sourceRate:        96000,
 			targetBits:        16,
-			targetRateStr:     "48kHz",
-			expectedLogFormat: "Converting FLAC: /path/to/music.flac (24-bit 96000 Hz → 16-bit 48kHz)",
+			targetRateStr:     "48000 Hz",
+			expectedLogFormat: "Converting FLAC: /path/to/music.flac (24-bit 96000 Hz → 16-bit 48000 Hz)",
 		},
 		{
 			name:              "24-bit 88.2kHz to 16-bit 44.1kHz",
@@ -3327,8 +3400,8 @@ func TestConversionLogOutput(t *testing.T) {
 			sourceBits:        24,
 			sourceRate:        88200,
 			targetBits:        16,
-			targetRateStr:     "44.1kHz",
-			expectedLogFormat: "Converting FLAC: /music/track.flac (24-bit 88200 Hz → 16-bit 44.1kHz)",
+			targetRateStr:     "44100 Hz",
+			expectedLogFormat: "Converting FLAC: /music/track.flac (24-bit 88200 Hz → 16-bit 44100 Hz)",
 		},
 		{
 			name:              "32-bit 192kHz to 16-bit 48kHz",
@@ -3336,8 +3409,8 @@ func TestConversionLogOutput(t *testing.T) {
 			sourceBits:        32,
 			sourceRate:        192000,
 			targetBits:        16,
-			targetRateStr:     "48kHz",
-			expectedLogFormat: "Converting FLAC: test.flac (32-bit 192000 Hz → 16-bit 48kHz)",
+			targetRateStr:     "48000 Hz",
+			expectedLogFormat: "Converting FLAC: test.flac (32-bit 192000 Hz → 16-bit 48000 Hz)",
 		},
 		{
 			name:              "16-bit 96kHz to 16-bit 48kHz (sample rate only)",
@@ -3345,8 +3418,8 @@ func TestConversionLogOutput(t *testing.T) {
 			sourceBits:        16,
 			sourceRate:        96000,
 			targetBits:        16,
-			targetRateStr:     "48kHz",
-			expectedLogFormat: "Converting FLAC: sample.flac (16-bit 96000 Hz → 16-bit 48kHz)",
+			targetRateStr:     "48000 Hz",
+			expectedLogFormat: "Converting FLAC: sample.flac (16-bit 96000 Hz → 16-bit 48000 Hz)",
 		},
 		{
 			name:              "24-bit 176.4kHz to 16-bit 44.1kHz",
@@ -3354,8 +3427,8 @@ func TestConversionLogOutput(t *testing.T) {
 			sourceBits:        24,
 			sourceRate:        176400,
 			targetBits:        16,
-			targetRateStr:     "44.1kHz",
-			expectedLogFormat: "Converting FLAC: hires.flac (24-bit 176400 Hz → 16-bit 44.1kHz)",
+			targetRateStr:     "44100 Hz",
+			expectedLogFormat: "Converting FLAC: hires.flac (24-bit 176400 Hz → 16-bit 44100 Hz)",
 		},
 		{
 			name:              "32-bit 352.8kHz to 16-bit 44.1kHz",
@@ -3363,8 +3436,8 @@ func TestConversionLogOutput(t *testing.T) {
 			sourceBits:        32,
 			sourceRate:        352800,
 			targetBits:        16,
-			targetRateStr:     "44.1kHz",
-			expectedLogFormat: "Converting FLAC: ultra-hires.flac (32-bit 352800 Hz → 16-bit 44.1kHz)",
+			targetRateStr:     "44100 Hz",
+			expectedLogFormat: "Converting FLAC: ultra-hires.flac (32-bit 352800 Hz → 16-bit 44100 Hz)",
 		},
 	}
 

@@ -210,9 +210,9 @@ func processAudioFiles() error {
 			var targetRate string
 			switch audioInfo.Rate {
 			case 48000, 96000, 192000, 384000:
-				targetRate = "48kHz"
+				targetRate = "48000 Hz"
 			case 44100, 88200, 176400, 352800:
-				targetRate = "44.1kHz"
+				targetRate = "44100 Hz"
 			default:
 				targetRate = "same rate"
 			}
@@ -310,8 +310,8 @@ func processFlac(sourcePath, targetPath string, needsConversion bool, bitrateArg
 	var tempPath string
 
 	if !config.NoPreserveMetadata {
-		// Create temporary path for SoX output
-		tempPath = targetPath + ".tmp"
+		// Create temporary path for SoX output with proper FLAC extension
+		tempPath = strings.TrimSuffix(targetPath, ".flac") + ".tmp.flac"
 	} else {
 		tempPath = targetPath
 	}
@@ -435,6 +435,7 @@ func mergeMetadataWithFFmpeg(sourcePath, tempConvertedPath, targetPath string) e
 			"-map_metadata", "0",
 			"-c", "copy",
 			dockerTarget}
+
 		cmd = exec.Command("docker", args...)
 	} else {
 		// Local FFmpeg
