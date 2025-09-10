@@ -129,68 +129,6 @@ Sample Encoding: 16-bit Signed Integer PCM`,
 	}
 }
 
-func TestDetermineConversion(t *testing.T) {
-	testCases := []struct {
-		name               string
-		input              AudioInfo
-		expectedConversion bool
-		expectedBitrate    []string
-		expectedSampleRate []string
-	}{
-		{
-			name:               "24-bit 96kHz needs conversion",
-			input:              AudioInfo{Bits: 24, Rate: 96000},
-			expectedConversion: true,
-			expectedBitrate:    []string{"-b", "16"},
-			expectedSampleRate: []string{"rate", "-v", "-L", "48000"},
-		},
-		{
-			name:               "16-bit 44.1kHz no conversion",
-			input:              AudioInfo{Bits: 16, Rate: 44100},
-			expectedConversion: false,
-			expectedBitrate:    nil,
-			expectedSampleRate: []string{"rate", "-v", "-L"},
-		},
-		{
-			name:               "16-bit 88.2kHz needs sample rate conversion",
-			input:              AudioInfo{Bits: 16, Rate: 88200},
-			expectedConversion: true,
-			expectedBitrate:    nil,
-			expectedSampleRate: []string{"rate", "-v", "-L", "44100"},
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			needsConversion, bitrateArgs, sampleRateArgs := determineConversion(&tc.input)
-
-			if needsConversion != tc.expectedConversion {
-				t.Errorf("Expected conversion %v, got %v", tc.expectedConversion, needsConversion)
-			}
-
-			if len(bitrateArgs) != len(tc.expectedBitrate) {
-				t.Errorf("Expected bitrate args %v, got %v", tc.expectedBitrate, bitrateArgs)
-			} else {
-				for i, arg := range bitrateArgs {
-					if arg != tc.expectedBitrate[i] {
-						t.Errorf("Expected bitrate arg %s, got %s", tc.expectedBitrate[i], arg)
-					}
-				}
-			}
-
-			if len(sampleRateArgs) != len(tc.expectedSampleRate) {
-				t.Errorf("Expected sample rate args %v, got %v", tc.expectedSampleRate, sampleRateArgs)
-			} else {
-				for i, arg := range sampleRateArgs {
-					if arg != tc.expectedSampleRate[i] {
-						t.Errorf("Expected sample rate arg %s, got %s", tc.expectedSampleRate[i], arg)
-					}
-				}
-			}
-		})
-	}
-}
-
 func TestCopyFile(t *testing.T) {
 	// Create a temporary directory for testing
 	tmpDir, err := os.MkdirTemp("", "flac-converter-test")

@@ -310,8 +310,9 @@ func processFlac(sourcePath, targetPath string, needsConversion bool, bitrateArg
 	var tempPath string
 
 	if !config.NoPreserveMetadata {
-		// Create temporary path for SoX output with proper FLAC extension
-		tempPath = strings.TrimSuffix(targetPath, ".flac") + ".tmp.flac"
+		// Create temporary path for SoX output with proper extension
+		ext := filepath.Ext(targetPath)
+		tempPath = strings.TrimSuffix(targetPath, ext) + ".tmp" + ext
 	} else {
 		tempPath = targetPath
 	}
