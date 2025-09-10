@@ -372,12 +372,12 @@ func processFlac(sourcePath, targetPath string, needsConversion bool, bitrateArg
 
 func getDockerPath(hostPath string) string {
 	relPath := normalizeForDocker(config.SourceDir, hostPath)
-	return filepath.Join("/source", relPath)
+	return "/source/" + relPath
 }
 
 func getDockerTargetPath(hostPath string) string {
 	relPath := normalizeForDocker(config.TargetDir, hostPath)
-	return filepath.Join("/target", relPath)
+	return "/target/" + relPath
 }
 
 func normalizeForDocker(base, path string) string {
