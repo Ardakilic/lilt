@@ -718,7 +718,11 @@ func selfUpdate(client *http.Client) error {
 						rc.Close()
 						continue
 					}
-					_, err = io.Copy(outFile, rc)
+					if _, err = io.Copy(outFile, rc); err != nil {
+						outFile.Close()
+						rc.Close()
+						continue
+					}
 					outFile.Close()
 					rc.Close()
 					break
@@ -758,7 +762,10 @@ func selfUpdate(client *http.Client) error {
 					if err != nil {
 						continue
 					}
-					_, err = io.Copy(outFile, tr)
+					if _, err = io.Copy(outFile, tr); err != nil {
+						outFile.Close()
+						continue
+					}
 					outFile.Close()
 					break
 				}
