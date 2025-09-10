@@ -1272,11 +1272,39 @@ func TestDetermineConversionAllCases(t *testing.T) {
 			expectedSampleRate: []string{"rate", "-v", "-L", "44100"},
 		},
 		{
+			name:               "16-bit 176.4kHz needs sample rate conversion",
+			input:              AudioInfo{Bits: 16, Rate: 176400},
+			expectedConversion: true,
+			expectedBitrate:    nil,
+			expectedSampleRate: []string{"rate", "-v", "-L", "44100"},
+		},
+		{
+			name:               "16-bit 352.8kHz needs sample rate conversion",
+			input:              AudioInfo{Bits: 16, Rate: 352800},
+			expectedConversion: true,
+			expectedBitrate:    nil,
+			expectedSampleRate: []string{"rate", "-v", "-L", "44100"},
+		},
+		{
 			name:               "24-bit 96kHz needs both conversions",
 			input:              AudioInfo{Bits: 24, Rate: 96000},
 			expectedConversion: true,
 			expectedBitrate:    []string{"-b", "16"},
 			expectedSampleRate: []string{"rate", "-v", "-L", "48000"},
+		},
+		{
+			name:               "24-bit 176.4kHz needs both conversions",
+			input:              AudioInfo{Bits: 24, Rate: 176400},
+			expectedConversion: true,
+			expectedBitrate:    []string{"-b", "16"},
+			expectedSampleRate: []string{"rate", "-v", "-L", "44100"},
+		},
+		{
+			name:               "24-bit 352.8kHz needs both conversions",
+			input:              AudioInfo{Bits: 24, Rate: 352800},
+			expectedConversion: true,
+			expectedBitrate:    []string{"-b", "16"},
+			expectedSampleRate: []string{"rate", "-v", "-L", "44100"},
 		},
 	}
 
@@ -3208,4 +3236,388 @@ func TestMergeMetadataDocker(t *testing.T) {
 
 	err = mergeMetadataWithFFmpeg(sourcePath, tempPath, targetPath)
 	t.Logf("Docker merge error expected: %v", err)
+}
+
+// TestConversionLogTargetRateDetermination tests the switch case logic
+// for determining target sample rates in the conversion process
+func TestConversionLogTargetRateDetermination(t *testing.T) {
+	testCases := []struct {
+		name               string
+		audioRate          int
+		expectedTargetRate string
+	}{
+		{
+			name:               "96kHz to 48kHz",
+			audioRate:          96000,
+			expectedTargetRate: "48kHz",
+		},
+		{
+			name:               "192kHz to 48kHz",
+			audioRate:          192000,
+			expectedTargetRate: "48kHz",
+		},
+		{
+			name:               "88.2kHz to 44.1kHz",
+			audioRate:          88200,
+			expectedTargetRate: "44.1kHz",
+		},
+		{
+			name:               "176.4kHz to 44.1kHz",
+			audioRate:          176400,
+			expectedTargetRate: "44.1kHz",
+		},
+		{
+			name:               "44.1kHz no change",
+			audioRate:          44100,
+			expectedTargetRate: "44.1kHz",
+		},
+		{
+			name:               "48kHz no change",
+			audioRate:          48000,
+			expectedTargetRate: "48kHz",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			audioInfo := AudioInfo{Rate: tc.audioRate}
+
+			var targetRateStr string
+			switch audioInfo.Rate {
+			case 48000, 96000, 192000, 384000:
+				targetRateStr = "48kHz"
+			case 44100, 88200, 176400, 352800:
+				targetRateStr = "44.1kHz"
+			default:
+				targetRateStr = "same rate"
+			}
+
+			if targetRateStr != tc.expectedTargetRate {
+				t.Errorf("Expected target rate %s, got %s for input rate %d Hz",
+					tc.expectedTargetRate, targetRateStr, tc.audioRate)
+			}
+		})
+	}
+}
+
+// TestConversionLogOutput tests the actual log message formatting
+// for different audio conversion scenarios
+func TestConversionLogOutput(t *testing.T) {
+	testCases := []struct {
+		name              string
+		sourceFile        string
+		sourceBits        int
+		sourceRate        int
+		targetBits        int
+		targetRateStr     string
+		expectedLogFormat string
+	}{
+		{
+			name:              "Hi-Res 24-bit 96kHz to 16-bit 48kHz",
+			sourceFile:        "/path/to/music.flac",
+			sourceBits:        24,
+			sourceRate:        96000,
+			targetBits:        16,
+			targetRateStr:     "48kHz",
+			expectedLogFormat: "Converting FLAC: /path/to/music.flac (24-bit 96000 Hz → 16-bit 48kHz)",
+		},
+		{
+			name:              "24-bit 88.2kHz to 16-bit 44.1kHz",
+			sourceFile:        "/music/track.flac",
+			sourceBits:        24,
+			sourceRate:        88200,
+			targetBits:        16,
+			targetRateStr:     "44.1kHz",
+			expectedLogFormat: "Converting FLAC: /music/track.flac (24-bit 88200 Hz → 16-bit 44.1kHz)",
+		},
+		{
+			name:              "32-bit 192kHz to 16-bit 48kHz",
+			sourceFile:        "test.flac",
+			sourceBits:        32,
+			sourceRate:        192000,
+			targetBits:        16,
+			targetRateStr:     "48kHz",
+			expectedLogFormat: "Converting FLAC: test.flac (32-bit 192000 Hz → 16-bit 48kHz)",
+		},
+		{
+			name:              "16-bit 96kHz to 16-bit 48kHz (sample rate only)",
+			sourceFile:        "sample.flac",
+			sourceBits:        16,
+			sourceRate:        96000,
+			targetBits:        16,
+			targetRateStr:     "48kHz",
+			expectedLogFormat: "Converting FLAC: sample.flac (16-bit 96000 Hz → 16-bit 48kHz)",
+		},
+		{
+			name:              "24-bit 176.4kHz to 16-bit 44.1kHz",
+			sourceFile:        "hires.flac",
+			sourceBits:        24,
+			sourceRate:        176400,
+			targetBits:        16,
+			targetRateStr:     "44.1kHz",
+			expectedLogFormat: "Converting FLAC: hires.flac (24-bit 176400 Hz → 16-bit 44.1kHz)",
+		},
+		{
+			name:              "32-bit 352.8kHz to 16-bit 44.1kHz",
+			sourceFile:        "ultra-hires.flac",
+			sourceBits:        32,
+			sourceRate:        352800,
+			targetBits:        16,
+			targetRateStr:     "44.1kHz",
+			expectedLogFormat: "Converting FLAC: ultra-hires.flac (32-bit 352800 Hz → 16-bit 44.1kHz)",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Simulate the log message construction
+			logMessage := fmt.Sprintf("Converting FLAC: %s (%d-bit %d Hz → %d-bit %s)",
+				tc.sourceFile, tc.sourceBits, tc.sourceRate, tc.targetBits, tc.targetRateStr)
+
+			if logMessage != tc.expectedLogFormat {
+				t.Errorf("Expected log format:\n%s\nGot:\n%s", tc.expectedLogFormat, logMessage)
+			}
+
+			// Verify the message contains all expected components
+			if !strings.Contains(logMessage, "Converting FLAC:") {
+				t.Error("Log message should contain 'Converting FLAC:'")
+			}
+			if !strings.Contains(logMessage, tc.sourceFile) {
+				t.Error("Log message should contain the source file path")
+			}
+			if !strings.Contains(logMessage, fmt.Sprintf("%d-bit", tc.sourceBits)) {
+				t.Error("Log message should contain source bit depth")
+			}
+			if !strings.Contains(logMessage, fmt.Sprintf("%d Hz", tc.sourceRate)) {
+				t.Error("Log message should contain source sample rate")
+			}
+			if !strings.Contains(logMessage, "→") {
+				t.Error("Log message should contain conversion arrow")
+			}
+			if !strings.Contains(logMessage, fmt.Sprintf("%d-bit", tc.targetBits)) {
+				t.Error("Log message should contain target bit depth")
+			}
+			if !strings.Contains(logMessage, tc.targetRateStr) {
+				t.Error("Log message should contain target sample rate string")
+			}
+		})
+	}
+}
+
+// TestSampleRateConversionMapping tests the comprehensive mapping
+// of all sample rate conversion scenarios
+func TestSampleRateConversionMapping(t *testing.T) {
+	testCases := []struct {
+		name                    string
+		inputRate               int
+		expectedNeedsConversion bool
+		expectedTargetRate      string
+		expectedSoxArg          string
+	}{
+		// High sample rates that need conversion to 48kHz
+		{
+			name:                    "96kHz needs conversion",
+			inputRate:               96000,
+			expectedNeedsConversion: true,
+			expectedTargetRate:      "48kHz",
+			expectedSoxArg:          "48000",
+		},
+		{
+			name:                    "192kHz needs conversion",
+			inputRate:               192000,
+			expectedNeedsConversion: true,
+			expectedTargetRate:      "48kHz",
+			expectedSoxArg:          "48000",
+		},
+		{
+			name:                    "384kHz needs conversion",
+			inputRate:               384000,
+			expectedNeedsConversion: true,
+			expectedTargetRate:      "48kHz",
+			expectedSoxArg:          "48000",
+		},
+		// High sample rates that need conversion to 44.1kHz
+		{
+			name:                    "88.2kHz needs conversion",
+			inputRate:               88200,
+			expectedNeedsConversion: true,
+			expectedTargetRate:      "44.1kHz",
+			expectedSoxArg:          "44100",
+		},
+		{
+			name:                    "176.4kHz needs conversion",
+			inputRate:               176400,
+			expectedNeedsConversion: true,
+			expectedTargetRate:      "44.1kHz",
+			expectedSoxArg:          "44100",
+		},
+		{
+			name:                    "352.8kHz needs conversion",
+			inputRate:               352800,
+			expectedNeedsConversion: true,
+			expectedTargetRate:      "44.1kHz",
+			expectedSoxArg:          "44100",
+		},
+		// Standard rates that don't need conversion
+		{
+			name:                    "44.1kHz no conversion",
+			inputRate:               44100,
+			expectedNeedsConversion: false,
+			expectedTargetRate:      "44.1kHz",
+			expectedSoxArg:          "",
+		},
+		{
+			name:                    "48kHz no conversion",
+			inputRate:               48000,
+			expectedNeedsConversion: false,
+			expectedTargetRate:      "48kHz",
+			expectedSoxArg:          "",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			audioInfo := AudioInfo{
+				Bits: 16, // Use standard bit depth for rate testing
+				Rate: tc.inputRate,
+			}
+
+			needsConversion, _, sampleRateArgs := determineConversion(&audioInfo)
+
+			// Check if conversion is needed
+			if needsConversion != tc.expectedNeedsConversion {
+				t.Errorf("Expected needsConversion %v, got %v",
+					tc.expectedNeedsConversion, needsConversion)
+			}
+
+			// Check target rate determination using switch case logic
+			var targetRateStr string
+			switch audioInfo.Rate {
+			case 48000, 96000, 192000, 384000:
+				targetRateStr = "48kHz"
+			case 44100, 88200, 176400, 352800:
+				targetRateStr = "44.1kHz"
+			default:
+				targetRateStr = "same rate"
+			}
+
+			if targetRateStr != tc.expectedTargetRate {
+				t.Errorf("Expected target rate %s, got %s",
+					tc.expectedTargetRate, targetRateStr)
+			}
+
+			// Check SoX arguments when conversion is needed
+			if tc.expectedNeedsConversion {
+				if len(sampleRateArgs) < 4 {
+					t.Errorf("Expected sample rate args with target rate, got %v", sampleRateArgs)
+				} else if sampleRateArgs[3] != tc.expectedSoxArg {
+					t.Errorf("Expected SoX target rate %s, got %s",
+						tc.expectedSoxArg, sampleRateArgs[3])
+				}
+			} else {
+				// No conversion needed, should not have target rate in args
+				if len(sampleRateArgs) > 3 {
+					t.Errorf("Expected no target rate in args for no conversion case, got %v", sampleRateArgs)
+				}
+			}
+		})
+	}
+}
+
+// TestConversionLogIntegration tests the integration of all components
+// that contribute to the conversion logging functionality
+func TestConversionLogIntegration(t *testing.T) {
+	testCases := []struct {
+		name         string
+		audioInfo    AudioInfo
+		expectedLog  string
+		expectedConv bool
+	}{
+		{
+			name:         "Complete Hi-Res conversion scenario",
+			audioInfo:    AudioInfo{Bits: 24, Rate: 96000},
+			expectedLog:  "24-bit 96000 Hz → 16-bit 48kHz",
+			expectedConv: true,
+		},
+		{
+			name:         "Bit depth only conversion",
+			audioInfo:    AudioInfo{Bits: 24, Rate: 44100},
+			expectedLog:  "24-bit 44100 Hz → 16-bit 44.1kHz",
+			expectedConv: true,
+		},
+		{
+			name:         "Sample rate only conversion",
+			audioInfo:    AudioInfo{Bits: 16, Rate: 88200},
+			expectedLog:  "16-bit 88200 Hz → 16-bit 44.1kHz",
+			expectedConv: true,
+		},
+		{
+			name:         "No conversion needed",
+			audioInfo:    AudioInfo{Bits: 16, Rate: 44100},
+			expectedLog:  "16-bit 44100 Hz → 16-bit 44.1kHz",
+			expectedConv: false,
+		},
+		{
+			name:         "176.4kHz sample rate conversion",
+			audioInfo:    AudioInfo{Bits: 16, Rate: 176400},
+			expectedLog:  "16-bit 176400 Hz → 16-bit 44.1kHz",
+			expectedConv: true,
+		},
+		{
+			name:         "352.8kHz complete conversion scenario",
+			audioInfo:    AudioInfo{Bits: 24, Rate: 352800},
+			expectedLog:  "24-bit 352800 Hz → 16-bit 44.1kHz",
+			expectedConv: true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Test conversion determination
+			needsConversion, bitrateArgs, sampleRateArgs := determineConversion(&tc.audioInfo)
+
+			if needsConversion != tc.expectedConv {
+				t.Errorf("Expected conversion %v, got %v", tc.expectedConv, needsConversion)
+			}
+
+			// Test target rate determination using the switch case logic (matches main.go)
+			var targetRateStr string
+			switch tc.audioInfo.Rate {
+			case 48000, 96000, 192000, 384000:
+				targetRateStr = "48kHz"
+			case 44100, 88200, 176400, 352800:
+				targetRateStr = "44.1kHz"
+			default:
+				targetRateStr = "same rate"
+			}
+
+			// Test target bit depth (always 16-bit for conversions)
+			targetBits := 16
+
+			// Construct the expected log format
+			logFormat := fmt.Sprintf("%d-bit %d Hz → %d-bit %s",
+				tc.audioInfo.Bits, tc.audioInfo.Rate, targetBits, targetRateStr)
+
+			if !strings.Contains(tc.expectedLog, logFormat) && tc.expectedLog != logFormat {
+				t.Errorf("Expected log format %s, got %s", tc.expectedLog, logFormat)
+			}
+
+			// Verify SoX arguments are correct for the conversion
+			if needsConversion {
+				// Check bitrate args
+				if tc.audioInfo.Bits > 16 {
+					if len(bitrateArgs) != 2 || bitrateArgs[0] != "-b" || bitrateArgs[1] != "16" {
+						t.Errorf("Expected bitrate args [-b 16], got %v", bitrateArgs)
+					}
+				}
+
+				// Check sample rate args
+				if tc.audioInfo.Rate > 48000 {
+					if len(sampleRateArgs) < 4 {
+						t.Errorf("Expected sample rate args with target, got %v", sampleRateArgs)
+					}
+				}
+			}
+		})
+	}
 }

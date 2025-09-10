@@ -206,7 +206,17 @@ func processAudioFiles() error {
 		needsConversion, bitrateArgs, sampleRateArgs := determineConversion(audioInfo)
 
 		if needsConversion {
-			fmt.Printf("Converting FLAC: %s\n", path)
+			// Determine target sample rate for display based on source rate
+			var targetRate string
+			switch audioInfo.Rate {
+			case 48000, 96000, 192000, 384000:
+				targetRate = "48kHz"
+			case 44100, 88200, 176400, 352800:
+				targetRate = "44.1kHz"
+			default:
+				targetRate = "same rate"
+			}
+			fmt.Printf("Converting FLAC: %s (%d-bit %d Hz → 16-bit %s)\n", path, audioInfo.Bits, audioInfo.Rate, targetRate)
 			if err := processFlac(path, targetPath, needsConversion, bitrateArgs, sampleRateArgs); err != nil {
 				fmt.Printf("Error: Sox conversion failed. Copying original file instead. Error: %v\n", err)
 				return copyFile(path, targetPath)
@@ -284,7 +294,7 @@ func determineConversion(info *AudioInfo) (bool, []string, []string) {
 	case 96000, 192000, 384000:
 		needsConversion = true
 		sampleRateArgs = append(sampleRateArgs, "48000")
-	case 88200:
+	case 88200, 176400, 352800:
 		needsConversion = true
 		sampleRateArgs = append(sampleRateArgs, "44100")
 	}
