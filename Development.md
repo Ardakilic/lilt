@@ -259,6 +259,29 @@ The application uses standard Go logging. For more verbose output:
 5. Format code: `make fmt`
 6. Submit pull request
 
+## Recent Fixes and Improvements
+
+### Cover Art Preservation Fix
+
+Previously, when ID tags were copied using FFmpeg, cover images (album artwork) were not copied to the converted file. This has been fixed by adding video stream mapping to the FFmpeg command.
+
+**Technical Details:**
+- Added `-map 0:v?` parameter to copy video streams (cover art) from source file
+- The `?` makes it optional, so the command won't fail if there are no video streams
+- Cover art in FLAC files is stored as video streams, which is why this mapping was necessary
+
+**FFmpeg Command Before:**
+```bash
+ffmpeg -i source.flac -i converted.flac -map 1 -map_metadata 0 -c copy output.flac
+```
+
+**FFmpeg Command After:**
+```bash
+ffmpeg -i source.flac -i converted.flac -map 1 -map 0:v? -map_metadata 0 -c copy output.flac
+```
+
+This fix applies to both local FFmpeg execution and Docker-based execution.
+
 ## CI/CD
 
 The project uses GitHub Actions for:

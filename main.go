@@ -22,12 +22,13 @@ import (
 
 // Config holds the application configuration
 type Config struct {
-	SourceDir   string
-	TargetDir   string
-	CopyImages  bool
-	UseDocker   bool
-	DockerImage string
-	SoxCommand  string
+	SourceDir          string
+	TargetDir          string
+	CopyImages         bool
+	UseDocker          bool
+	DockerImage        string
+	SoxCommand         string
+	NoPreserveMetadata bool
 }
 
 // AudioInfo holds information about an audio file
@@ -62,6 +63,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&config.CopyImages, "copy-images", false, "Copy JPG and PNG files")
 	rootCmd.Flags().BoolVar(&config.UseDocker, "use-docker", false, "Use Docker to run Sox instead of local installation")
 	rootCmd.Flags().StringVar(&config.DockerImage, "docker-image", "ardakilic/sox_ng:latest", "Specify Docker image")
+	rootCmd.Flags().BoolVar(&config.NoPreserveMetadata, "no-preserve-metadata", false, "Do not preserve ID3 tags and cover art using FFmpeg (metadata is preserved by default)")
 	rootCmd.Flags().BoolVar(&selfUpdateFlag, "self-update", false, "Check for updates and self-update if newer version available")
 
 	// Set default values
@@ -145,6 +147,13 @@ func setupSoxCommand() error {
 		if _, err := exec.LookPath(config.SoxCommand); err != nil {
 			return fmt.Errorf("sox is not installed. Please install sox or use --use-docker option")
 		}
+
+		// Check for FFmpeg if preserving metadata in local mode
+		if !config.NoPreserveMetadata {
+			if _, err := exec.LookPath("ffmpeg"); err != nil {
+				return fmt.Errorf("ffmpeg is not installed. Please install FFmpeg for metadata preservation or use --use-docker option")
+			}
+		}
 	}
 	return nil
 }
@@ -197,8 +206,18 @@ func processAudioFiles() error {
 		needsConversion, bitrateArgs, sampleRateArgs := determineConversion(audioInfo)
 
 		if needsConversion {
-			fmt.Printf("Converting FLAC: %s\n", path)
-			if err := convertFlac(path, targetPath, bitrateArgs, sampleRateArgs); err != nil {
+			// Determine target sample rate for display based on source rate
+			var targetRate string
+			switch audioInfo.Rate {
+			case 48000, 96000, 192000, 384000:
+				targetRate = "48000 Hz"
+			case 44100, 88200, 176400, 352800:
+				targetRate = "44100 Hz"
+			default:
+				targetRate = "same rate"
+			}
+			fmt.Printf("Converting FLAC: %s (%d-bit %d Hz → 16-bit %s)\n", path, audioInfo.Bits, audioInfo.Rate, targetRate)
+			if err := processFlac(path, targetPath, needsConversion, bitrateArgs, sampleRateArgs); err != nil {
 				fmt.Printf("Error: Sox conversion failed. Copying original file instead. Error: %v\n", err)
 				return copyFile(path, targetPath)
 			}
@@ -275,7 +294,7 @@ func determineConversion(info *AudioInfo) (bool, []string, []string) {
 	case 96000, 192000, 384000:
 		needsConversion = true
 		sampleRateArgs = append(sampleRateArgs, "48000")
-	case 88200:
+	case 88200, 176400, 352800:
 		needsConversion = true
 		sampleRateArgs = append(sampleRateArgs, "44100")
 	}
@@ -283,12 +302,27 @@ func determineConversion(info *AudioInfo) (bool, []string, []string) {
 	return needsConversion, bitrateArgs, sampleRateArgs
 }
 
-func convertFlac(sourcePath, targetPath string, bitrateArgs, sampleRateArgs []string) error {
+func processFlac(sourcePath, targetPath string, needsConversion bool, bitrateArgs, sampleRateArgs []string) error {
+	if !needsConversion {
+		return copyFile(sourcePath, targetPath)
+	}
+
+	var tempPath string
+
+	if !config.NoPreserveMetadata {
+		// Create temporary path for SoX output with proper extension
+		ext := filepath.Ext(targetPath)
+		tempPath = strings.TrimSuffix(targetPath, ext) + ".tmp" + ext
+	} else {
+		tempPath = targetPath
+	}
+
+	// Run SoX conversion to tempPath or targetPath
 	var cmd *exec.Cmd
 
 	if config.UseDocker {
 		dockerSource := getDockerPath(sourcePath)
-		dockerTarget := getDockerTargetPath(targetPath)
+		dockerTemp := getDockerTargetPath(tempPath)
 
 		args := []string{"run", "--rm",
 			"-v", fmt.Sprintf("%s:/source", config.SourceDir),
@@ -296,7 +330,7 @@ func convertFlac(sourcePath, targetPath string, bitrateArgs, sampleRateArgs []st
 			config.DockerImage, "--multi-threaded", "-G", dockerSource}
 
 		args = append(args, bitrateArgs...)
-		args = append(args, dockerTarget)
+		args = append(args, dockerTemp)
 		args = append(args, sampleRateArgs...)
 		args = append(args, "dither")
 
@@ -304,24 +338,129 @@ func convertFlac(sourcePath, targetPath string, bitrateArgs, sampleRateArgs []st
 	} else {
 		args := []string{"--multi-threaded", "-G", sourcePath}
 		args = append(args, bitrateArgs...)
-		args = append(args, targetPath)
+		args = append(args, tempPath)
 		args = append(args, sampleRateArgs...)
 		args = append(args, "dither")
 
 		cmd = exec.Command(config.SoxCommand, args...)
 	}
 
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		if !config.NoPreserveMetadata && tempPath != "" {
+			defer os.Remove(tempPath) // Clean up temp on error
+		}
+		return fmt.Errorf("SoX conversion failed: %w", err)
+	}
+
+	if !config.NoPreserveMetadata {
+		// Merge metadata using FFmpeg
+		if mergeErr := mergeMetadataWithFFmpeg(sourcePath, tempPath, targetPath); mergeErr != nil {
+			fmt.Printf("Warning: Metadata preservation failed for %s, keeping converted audio without tags: %v\n", targetPath, mergeErr)
+			// Fallback: rename temp to target
+			if renameErr := os.Rename(tempPath, targetPath); renameErr != nil {
+				return fmt.Errorf("fallback rename failed after metadata merge error: %w", renameErr)
+			}
+			return nil
+		}
+		// If merge succeeded, temp is already removed in merge function
+	} else {
+		// If not preserving metadata, tempPath == targetPath, no action needed
+	}
+
+	return nil
 }
 
 func getDockerPath(hostPath string) string {
-	relPath, _ := filepath.Rel(config.SourceDir, hostPath)
-	return filepath.ToSlash(filepath.Join("/source", relPath))
+	relPath := normalizeForDocker(config.SourceDir, hostPath)
+	return "/source/" + relPath
 }
 
 func getDockerTargetPath(hostPath string) string {
-	relPath, _ := filepath.Rel(config.TargetDir, hostPath)
-	return filepath.ToSlash(filepath.Join("/target", relPath))
+	relPath := normalizeForDocker(config.TargetDir, hostPath)
+	return "/target/" + relPath
+}
+
+func normalizeForDocker(base, path string) string {
+	// Convert backslashes to forward slashes first
+	base = strings.ReplaceAll(base, "\\", "/")
+	path = strings.ReplaceAll(path, "\\", "/")
+
+	// Try to use filepath.VolumeName
+	volBase := filepath.VolumeName(base)
+	baseStripped := base
+	if volBase != "" {
+		baseStripped = base[len(volBase):]
+	} else {
+		// Manual check for Windows drive letter (e.g., C:/ or c:/)
+		if len(base) >= 3 && base[1] == ':' && base[2] == '/' {
+			baseStripped = base[3:]
+		}
+	}
+
+	volPath := filepath.VolumeName(path)
+	pathStripped := path
+	if volPath != "" {
+		pathStripped = path[len(volPath):]
+	} else {
+		if len(path) >= 3 && path[1] == ':' && path[2] == '/' {
+			pathStripped = path[3:]
+		}
+	}
+
+	rel, err := filepath.Rel(baseStripped, pathStripped)
+	if err != nil {
+		return filepath.ToSlash(pathStripped)
+	}
+	return filepath.ToSlash(rel)
+}
+func mergeMetadataWithFFmpeg(sourcePath, tempConvertedPath, targetPath string) error {
+	if config.NoPreserveMetadata {
+		// If not preserving metadata, just rename temp to target
+		return os.Rename(tempConvertedPath, targetPath)
+	}
+
+	var cmd *exec.Cmd
+
+	if config.UseDocker {
+		dockerSource := getDockerPath(sourcePath)
+		dockerTemp := getDockerTargetPath(tempConvertedPath)
+		dockerTarget := getDockerTargetPath(targetPath)
+
+		args := []string{"run", "--rm", "--entrypoint", "ffmpeg",
+			"-v", fmt.Sprintf("%s:/source", config.SourceDir),
+			"-v", fmt.Sprintf("%s:/target", config.TargetDir),
+			config.DockerImage,
+			"-i", dockerSource,
+			"-i", dockerTemp,
+			"-map", "1", // Map audio stream from the converted file (input 1)
+			"-map", "0:v?", // Map video streams (cover art) from source file (input 0), ? makes it optional
+			"-map_metadata", "0", // Map metadata from source file (input 0)
+			"-c", "copy", // Copy streams without re-encoding
+			dockerTarget}
+
+		cmd = exec.Command("docker", args...)
+	} else {
+		// Local FFmpeg
+		cmd = exec.Command("ffmpeg",
+			"-i", sourcePath,
+			"-i", tempConvertedPath,
+			"-map", "1", // Map audio stream from the converted file (input 1)
+			"-map", "0:v?", // Map video streams (cover art) from source file (input 0), ? makes it optional
+			"-map_metadata", "0", // Map metadata from source file (input 0)
+			"-c", "copy", // Copy streams without re-encoding
+			targetPath)
+	}
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("FFmpeg metadata merge failed: %w", err)
+	}
+
+	// Remove temp file after successful merge
+	if err := os.Remove(tempConvertedPath); err != nil {
+		fmt.Printf("Warning: Failed to remove temp file %s: %v\n", tempConvertedPath, err)
+	}
+
+	return nil
 }
 
 func copyImageFiles() error {
@@ -575,14 +714,21 @@ func selfUpdate(client *http.Client) error {
 				if f.Name == strings.TrimSuffix(filename, ".zip") { // Remove .zip
 					rc, err := f.Open()
 					if err != nil {
+						fmt.Printf("Warning: Failed to open file %s in zip: %v\n", f.Name, err)
 						continue
 					}
 					outFile, err := os.Create(filepath.Join(tempDir, f.Name))
 					if err != nil {
+						fmt.Printf("Warning: Failed to create output file %s: %v\n", f.Name, err)
 						rc.Close()
 						continue
 					}
-					_, err = io.Copy(outFile, rc)
+					if _, err = io.Copy(outFile, rc); err != nil {
+						fmt.Printf("Warning: Failed to copy file %s: %v\n", f.Name, err)
+						outFile.Close()
+						rc.Close()
+						continue
+					}
 					outFile.Close()
 					rc.Close()
 					break
@@ -620,9 +766,14 @@ func selfUpdate(client *http.Client) error {
 				if header.Typeflag == tar.TypeReg && filepath.Base(header.Name) == "flac-converter-"+goos+"-"+goarch {
 					outFile, err := os.Create(filepath.Join(tempDir, header.Name))
 					if err != nil {
+						fmt.Printf("Warning: Failed to create output file %s: %v\n", header.Name, err)
 						continue
 					}
-					_, err = io.Copy(outFile, tr)
+					if _, err = io.Copy(outFile, tr); err != nil {
+						fmt.Printf("Warning: Failed to copy file %s: %v\n", header.Name, err)
+						outFile.Close()
+						continue
+					}
 					outFile.Close()
 					break
 				}
