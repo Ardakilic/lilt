@@ -713,14 +713,17 @@ func selfUpdate(client *http.Client) error {
 				if f.Name == strings.TrimSuffix(filename, ".zip") { // Remove .zip
 					rc, err := f.Open()
 					if err != nil {
+						fmt.Printf("Warning: Failed to open file %s in zip: %v\n", f.Name, err)
 						continue
 					}
 					outFile, err := os.Create(filepath.Join(tempDir, f.Name))
 					if err != nil {
+						fmt.Printf("Warning: Failed to create output file %s: %v\n", f.Name, err)
 						rc.Close()
 						continue
 					}
 					if _, err = io.Copy(outFile, rc); err != nil {
+						fmt.Printf("Warning: Failed to copy file %s: %v\n", f.Name, err)
 						outFile.Close()
 						rc.Close()
 						continue
@@ -762,9 +765,11 @@ func selfUpdate(client *http.Client) error {
 				if header.Typeflag == tar.TypeReg && filepath.Base(header.Name) == "flac-converter-"+goos+"-"+goarch {
 					outFile, err := os.Create(filepath.Join(tempDir, header.Name))
 					if err != nil {
+						fmt.Printf("Warning: Failed to create output file %s: %v\n", header.Name, err)
 						continue
 					}
 					if _, err = io.Copy(outFile, tr); err != nil {
+						fmt.Printf("Warning: Failed to copy file %s: %v\n", header.Name, err)
 						outFile.Close()
 						continue
 					}
