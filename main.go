@@ -431,9 +431,10 @@ func mergeMetadataWithFFmpeg(sourcePath, tempConvertedPath, targetPath string) e
 			config.DockerImage,
 			"-i", dockerSource,
 			"-i", dockerTemp,
-			"-map", "1",
-			"-map_metadata", "0",
-			"-c", "copy",
+			"-map", "1", // Map audio stream from the converted file (input 1)
+			"-map", "0:v?", // Map video streams (cover art) from source file (input 0), ? makes it optional
+			"-map_metadata", "0", // Map metadata from source file (input 0)
+			"-c", "copy", // Copy streams without re-encoding
 			dockerTarget}
 
 		cmd = exec.Command("docker", args...)
@@ -442,9 +443,10 @@ func mergeMetadataWithFFmpeg(sourcePath, tempConvertedPath, targetPath string) e
 		cmd = exec.Command("ffmpeg",
 			"-i", sourcePath,
 			"-i", tempConvertedPath,
-			"-map", "1",
-			"-map_metadata", "0",
-			"-c", "copy",
+			"-map", "1", // Map audio stream from the converted file (input 1)
+			"-map", "0:v?", // Map video streams (cover art) from source file (input 0), ? makes it optional
+			"-map_metadata", "0", // Map metadata from source file (input 0)
+			"-c", "copy", // Copy streams without re-encoding
 			targetPath)
 	}
 

@@ -2954,6 +2954,9 @@ func TestProcessAudioFiles(t *testing.T) {
 	// Test with failing sox for fallback copy
 	config.SoxCommand = "false"
 	err = processAudioFiles()
+	if err != nil {
+		t.Logf("processAudioFiles with failing sox (fallback expected): %v", err)
+	}
 	// Should fallback copy on error
 	if _, err := os.Stat(filepath.Join(targetDir, "test.flac")); os.IsNotExist(err) {
 		t.Error("Fallback copy failed on sox error")
