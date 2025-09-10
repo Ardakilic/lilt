@@ -4,9 +4,12 @@
 *.dll
 *.so
 *.dylib
+lilt
+lilt-*
+lilt.*
+
+# old project name
 flac-converter
-flac-converter-*
-flac-converter.*
 
 # Test binary, built with `go test -c`
 *.test

@@ -1,14 +1,14 @@
 #!/bin/bash
 
-# FLAC to 16-bit Converter - Installation Script
+# Lilt - Installation Script
 # This script downloads and installs the latest release
 
 set -e
 
 # Configuration
-REPO="Ardakilic/flac-to-16bit-converter"
+REPO="Ardakilic/lilt"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
-BINARY_NAME="flac-converter"
+BINARY_NAME="lilt"
 
 # Colors for output
 RED='\033[0;31m'
@@ -116,7 +116,7 @@ install_binary() {
 
 # Main installation function
 main() {
-    print_status "Installing FLAC to 16-bit Converter..."
+    print_status "Installing Lilt..."
     
     # Check dependencies
     for cmd in curl tar; do
@@ -146,7 +146,7 @@ main() {
 # Handle command line arguments
 case "${1:-}" in
     --help|-h)
-        echo "FLAC to 16-bit Converter Installation Script"
+        echo "Lilt Installation Script"
         echo ""
         echo "Usage: $0 [options]"
         echo ""

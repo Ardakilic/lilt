@@ -1,4 +1,4 @@
-module github.com/Ardakilic/flac-to-16bit-converter
+module github.com/Ardakilic/lilt
 
 go 1.24.5
 

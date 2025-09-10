@@ -1,6 +1,6 @@
 # Development Guide
 
-This guide covers development workflows, building, testing, and deployment for the FLAC to 16-bit Converter.
+This guide covers development workflows, building, testing, and deployment for Lilt.
 
 ## Setting Version During Build
 
@@ -12,10 +12,10 @@ Set a specific version during build:
 
 ```bash
 # Set version to v1.2.3
-go build -ldflags="-X main.version=v1.2.3" -o flac-converter .
+go build -ldflags="-X main.version=v1.2.3" -o lilt .
 
 # Use environment variable
-VERSION=v1.2.3 go build -ldflags="-X main.version=$VERSION" -o flac-converter .
+VERSION=v1.2.3 go build -ldflags="-X main.version=$VERSION" -o lilt .
 ```
 
 ### Method 2: Using Git Tags (Recommended)
@@ -30,7 +30,7 @@ git push origin v1.0.0
 # Build with automatic version detection
 make build
 # or
-go build -ldflags="-X main.version=$(git describe --tags --always --dirty)" -o flac-converter .
+go build -ldflags="-X main.version=$(git describe --tags --always --dirty)" -o lilt .
 ```
 
 The `git describe` command will output something like:
@@ -67,8 +67,8 @@ make clean && make build
 
 ```bash
 # Clone the repository
-git clone https://github.com/Ardakilic/flac-to-16bit-converter.git
-cd flac-to-16bit-converter
+git clone https://github.com/Ardakilic/lilt.git
+cd lilt
 
 # Install dependencies
 go mod download
@@ -135,16 +135,16 @@ Key test areas:
 
 ```bash
 # Linux x64
-GOOS=linux GOARCH=amd64 go build -ldflags="-X main.version=v1.0.0" -o flac-converter-linux-amd64 .
+GOOS=linux GOARCH=amd64 go build -ldflags="-X main.version=v1.0.0" -o lilt-linux-amd64 .
 
 # Windows x64
-GOOS=windows GOARCH=amd64 go build -ldflags="-X main.version=v1.0.0" -o flac-converter-windows-amd64.exe .
+GOOS=windows GOARCH=amd64 go build -ldflags="-X main.version=v1.0.0" -o lilt-windows-amd64.exe .
 
 # macOS ARM64
-GOOS=darwin GOARCH=arm64 go build -ldflags="-X main.version=v1.0.0" -o flac-converter-darwin-arm64 .
+GOOS=darwin GOARCH=arm64 go build -ldflags="-X main.version=v1.0.0" -o lilt-darwin-arm64 .
 
 # Linux ARM64
-GOOS=linux GOARCH=arm64 go build -ldflags="-X main.version=v1.0.0" -o flac-converter-linux-arm64 .
+GOOS=linux GOARCH=arm64 go build -ldflags="-X main.version=v1.0.0" -o lilt-linux-arm64 .
 ```
 
 ### Cross-Platform Build (Using Makefile)
@@ -178,12 +178,12 @@ The version should follow semantic versioning:
 
 ```bash
 # Test with development version (skips update)
-go build -ldflags="-X main.version=dev" -o flac-converter .
-./flac-converter --self-update
+go build -ldflags="-X main.version=dev" -o lilt .
+./lilt --self-update
 
 # Test with specific version
-go build -ldflags="-X main.version=v1.0.0" -o flac-converter .
-./flac-converter --self-update
+go build -ldflags="-X main.version=v1.0.0" -o lilt .
+./lilt --self-update
 ```
 
 ## Release Process
@@ -205,7 +205,7 @@ For development/testing releases:
 
 ```bash
 # Build with pre-release version
-go build -ldflags="-X main.version=v1.0.0-rc.1" -o flac-converter .
+go build -ldflags="-X main.version=v1.0.0-rc.1" -o lilt .
 
 # Or use git describe for automatic pre-release detection
 make build  # Will include commit hash if not on exact tag
@@ -217,10 +217,10 @@ make build  # Will include commit hash if not on exact tag
 
 ```bash
 # Build the Docker image for testing
-docker build -t flac-converter-test .
+docker build -t lilt-test .
 
 # Run tests in Docker
-docker run --rm flac-converter-test go test ./...
+docker run --rm lilt-test go test ./...
 ```
 
 ### Using Docker for SoX
@@ -229,7 +229,7 @@ The application supports using Docker for SoX operations:
 
 ```bash
 # Build with Docker support
-./flac-converter /source/dir --use-docker --docker-image ardakilic/sox_ng:latest
+./lilt /source/dir --use-docker --docker-image ardakilic/sox_ng:latest
 ```
 
 ## Debugging
@@ -240,7 +240,7 @@ The application uses standard Go logging. For more verbose output:
 
 ```bash
 # Run with debug flags if implemented
-./flac-converter --verbose /source/dir
+./lilt --verbose /source/dir
 ```
 
 ### Common Issues

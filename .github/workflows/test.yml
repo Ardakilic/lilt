@@ -26,10 +26,10 @@ jobs:
       run: go test -v ./...
 
     - name: Test build
-      run: go build -o flac-converter .
+      run: go build -o lilt .
 
     - name: Test help command
-      run: ./flac-converter --help
+      run: ./lilt --help
 
     - name: Test version command
-      run: ./flac-converter --version
+      run: ./lilt --version
