@@ -2240,8 +2240,8 @@ func TestMergeMetadataWithFFmpegLocalSuccess(t *testing.T) {
 	os.WriteFile(sourcePath, []byte("source"), 0644)
 	os.WriteFile(tempPath, []byte("temp"), 0644)
 
-	// Mock ffmpeg by temporarily replacing exec.Command, but since hard, use a test where we expect error if no ffmpeg, but for success test, skip actual run or use if available
-	// For unit test, assume ffmpeg available or test logic only
+	// This test checks FFmpeg availability and skips if not installed, as mocking exec.Command is complex for unit tests.
+	// The test validates the success path when FFmpeg is available, or gracefully skips when it's not.
 	err = mergeMetadataWithFFmpeg(sourcePath, tempPath, targetPath)
 	if err != nil {
 		// If ffmpeg not installed, log but don't fail test
@@ -2279,7 +2279,7 @@ func TestMergeMetadataWithFFmpegLocalFailure(t *testing.T) {
 	os.WriteFile(sourcePath, []byte("source"), 0644)
 	os.WriteFile(tempPath, []byte("temp"), 0644)
 
-	// To test failure, temporarily set SoxCommand to something that fails, but for ffmpeg, we can check if exec.LookPath("ffmpeg") fails
+	// Test FFmpeg failure by checking if FFmpeg is unavailable on the system.
 	if _, err := exec.LookPath("ffmpeg"); err == nil {
 		t.Skip("FFmpeg is available, cannot test failure case easily without mocking")
 	}
@@ -2289,9 +2289,7 @@ func TestMergeMetadataWithFFmpegLocalFailure(t *testing.T) {
 		t.Error("Expected error when FFmpeg fails")
 	}
 
-	// Verify temp still exists (since failure, but actually in function it returns error without cleanup on failure? Wait, in code, cleanup is only on success
-	// In merge function, cleanup is after Run success, so on failure, temp remains, but in processFlac fallback, we rename it
-	// For this test, since it's the helper, expect error and temp not removed
+	// On FFmpeg failure, the temp file should remain since cleanup only occurs on successful merge.
 	if _, err := os.Stat(tempPath); os.IsNotExist(err) {
 		t.Error("Temp file should remain on FFmpeg failure")
 	}
@@ -2530,8 +2528,7 @@ func TestMergeMetadataWithFFmpegTempRemovalError(t *testing.T) {
 
 	os.WriteFile(sourcePath, []byte("source"), 0644)
 
-	// Mock audio info that needs conversion
-	// But since determineConversion is called earlier, for this test, we call processFlac directly with args
+	// Test processFlac directly with conversion arguments to verify metadata preservation logic.
 	bitrateArgs := []string{"-b", "16"}
 	sampleRateArgs := []string{"rate", "-v", "-L", "44100"}
 
