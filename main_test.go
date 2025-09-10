@@ -501,7 +501,7 @@ func TestGetAudioInfoDocker(t *testing.T) {
 	}
 }
 
-func TestConvertFlacDocker(t *testing.T) {
+func TestProcessFlacDocker(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "test-convert-docker")
 	if err != nil {
 		t.Fatal(err)
@@ -525,10 +525,10 @@ func TestConvertFlacDocker(t *testing.T) {
 	bitrateArgs := []string{"-b", "16"}
 	sampleRateArgs := []string{"rate", "-v", "-L", "44100"}
 
-	err = convertFlac(sourceFile, targetFile, bitrateArgs, sampleRateArgs)
+	err = processFlac(sourceFile, targetFile, true, bitrateArgs, sampleRateArgs)
 	// We expect this to fail since docker is not available, but it tests the Docker path
 	if err == nil {
-		t.Logf("convertFlac with Docker succeeded unexpectedly")
+		t.Logf("processFlac with Docker succeeded unexpectedly")
 	}
 }
 
@@ -2290,7 +2290,7 @@ func TestMergeMetadataWithFFmpegLocalFailure(t *testing.T) {
 	}
 
 	// Verify temp still exists (since failure, but actually in function it returns error without cleanup on failure? Wait, in code, cleanup is only on success
-	// In merge function, cleanup is after Run success, so on failure, temp remains, but in convertFlac fallback, we rename it
+	// In merge function, cleanup is after Run success, so on failure, temp remains, but in processFlac fallback, we rename it
 	// For this test, since it's the helper, expect error and temp not removed
 	if _, err := os.Stat(tempPath); os.IsNotExist(err) {
 		t.Error("Temp file should remain on FFmpeg failure")
@@ -2422,11 +2422,11 @@ func TestMergeMetadataWithFFmpegTempRemovalError(t *testing.T) {
 	os.WriteFile(sourcePath, []byte("source"), 0644)
 
 	// Mock audio info that needs conversion
-	// But since determineConversion is called earlier, for this test, we call convertFlac directly with args
+	// But since determineConversion is called earlier, for this test, we call processFlac directly with args
 	bitrateArgs := []string{"-b", "16"}
 	sampleRateArgs := []string{"rate", "-v", "-L", "44100"}
 
-	err = convertFlac(sourcePath, targetPath, bitrateArgs, sampleRateArgs)
+	err = processFlac(sourcePath, targetPath, true, bitrateArgs, sampleRateArgs)
 	if err != nil {
 		// If ffmpeg not available, accept fallback rename error as known case
 		if strings.Contains(err.Error(), "fallback rename failed") || strings.Contains(err.Error(), "FFmpeg metadata merge failed") {
@@ -2443,7 +2443,7 @@ func TestMergeMetadataWithFFmpegTempRemovalError(t *testing.T) {
 	}
 }
 
-func TestConvertFlacDockerFailure(t *testing.T) {
+func TestProcessFlacDockerFailure(t *testing.T) {
 	originalConfig := config
 	defer func() { config = originalConfig }()
 
@@ -2465,18 +2465,18 @@ func TestConvertFlacDockerFailure(t *testing.T) {
 	bitrateArgs := []string{"-b", "16"}
 	sampleRateArgs := []string{"rate", "-v", "-L", "44100"}
 
-	err = convertFlac(sourcePath, targetPath, bitrateArgs, sampleRateArgs)
+	err = processFlac(sourcePath, targetPath, true, bitrateArgs, sampleRateArgs)
 	if err == nil {
 		t.Error("Expected Docker failure but got nil")
 	}
 
 	// Verify fallback copy
 	if _, err := os.Stat(targetPath); !os.IsNotExist(err) {
-		t.Error("Target file should not exist after Docker sox failure in convertFlac")
+		t.Error("Target file should not exist after Docker sox failure in processFlac")
 	}
 }
 
-func TestConvertFlacMetadataFallback(t *testing.T) {
+func TestProcessFlacMetadataFallback(t *testing.T) {
 	originalConfig := config
 	defer func() { config = originalConfig }()
 
@@ -2498,7 +2498,7 @@ func TestConvertFlacMetadataFallback(t *testing.T) {
 	bitrateArgs := []string{"-b", "16"}
 	sampleRateArgs := []string{"rate", "-v", "-L", "44100"}
 
-	err = convertFlac(sourcePath, targetPath, bitrateArgs, sampleRateArgs)
+	err = processFlac(sourcePath, targetPath, true, bitrateArgs, sampleRateArgs)
 	if err == nil {
 		t.Error("Expected error on sox failure")
 	}
@@ -2510,7 +2510,7 @@ func TestConvertFlacMetadataFallback(t *testing.T) {
 	}
 }
 
-func TestConvertFlacNoConversionWithMetadata(t *testing.T) {
+func TestProcessFlacNoConversionWithMetadata(t *testing.T) {
 	originalConfig := config
 	defer func() { config = originalConfig }()
 
@@ -2531,7 +2531,7 @@ func TestConvertFlacNoConversionWithMetadata(t *testing.T) {
 	bitrateArgs := []string{}
 	sampleRateArgs := []string{"rate", "-v", "-L"}
 
-	err = convertFlac(sourcePath, targetPath, bitrateArgs, sampleRateArgs)
+	err = processFlac(sourcePath, targetPath, false, bitrateArgs, sampleRateArgs)
 	if err != nil {
 		t.Errorf("Expected no error for no conversion, got: %v", err)
 	}
@@ -2665,7 +2665,7 @@ func TestProcessAudioFiles(t *testing.T) {
 	}
 }
 
-func TestConvertFlac(t *testing.T) {
+func TestProcessFlac(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "test-convert-flac")
 	if err != nil {
 		t.Fatal(err)
@@ -2685,7 +2685,7 @@ func TestConvertFlac(t *testing.T) {
 		config.NoPreserveMetadata = true
 		bitrateArgs := []string{}
 		sampleRateArgs := []string{"rate", "-v", "-L"}
-		err := convertFlac(sourcePath, targetPath, bitrateArgs, sampleRateArgs)
+		err := processFlac(sourcePath, targetPath, false, bitrateArgs, sampleRateArgs)
 		if err != nil {
 			t.Errorf("Expected no error for no conversion, got: %v", err)
 		}
@@ -2700,7 +2700,7 @@ func TestConvertFlac(t *testing.T) {
 		config.NoPreserveMetadata = true
 		bitrateArgs := []string{"-b", "16"}
 		sampleRateArgs := []string{"rate", "-v", "-L"}
-		err := convertFlac(sourcePath, targetPath, bitrateArgs, sampleRateArgs)
+		err := processFlac(sourcePath, targetPath, true, bitrateArgs, sampleRateArgs)
 		if err != nil {
 			t.Logf("Conversion error (if no sox): %v", err)
 		}
@@ -2712,7 +2712,7 @@ func TestConvertFlac(t *testing.T) {
 		config.NoPreserveMetadata = true
 		bitrateArgs := []string{}
 		sampleRateArgs := []string{"rate", "-v", "-L", "44100"}
-		err := convertFlac(sourcePath, targetPath, bitrateArgs, sampleRateArgs)
+		err := processFlac(sourcePath, targetPath, true, bitrateArgs, sampleRateArgs)
 		if err != nil {
 			t.Logf("Conversion error (if no sox): %v", err)
 		}
@@ -2725,7 +2725,7 @@ func TestConvertFlac(t *testing.T) {
 		// Assume FFmpeg available or test fallback
 		bitrateArgs := []string{"-b", "16"}
 		sampleRateArgs := []string{"rate", "-v", "-L", "44100"}
-		err := convertFlac(sourcePath, targetPath, bitrateArgs, sampleRateArgs)
+		err := processFlac(sourcePath, targetPath, true, bitrateArgs, sampleRateArgs)
 		if err != nil {
 			t.Logf("Metadata preserve error (if no ffmpeg): %v", err)
 		}
@@ -2738,7 +2738,7 @@ func TestConvertFlac(t *testing.T) {
 		// If FFmpeg fails, fallback rename
 		bitrateArgs := []string{"-b", "16"}
 		sampleRateArgs := []string{"rate", "-v", "-L", "44100"}
-		err := convertFlac(sourcePath, targetPath, bitrateArgs, sampleRateArgs)
+		err := processFlac(sourcePath, targetPath, true, bitrateArgs, sampleRateArgs)
 		if err != nil {
 			t.Logf("Expected fallback on metadata fail: %v", err)
 		}
@@ -2754,7 +2754,7 @@ func TestConvertFlac(t *testing.T) {
 		config.TargetDir = tmpDir
 		bitrateArgs := []string{"-b", "16"}
 		sampleRateArgs := []string{"rate", "-v", "-L", "44100"}
-		err := convertFlac(sourcePath, targetPath, bitrateArgs, sampleRateArgs)
+		err := processFlac(sourcePath, targetPath, true, bitrateArgs, sampleRateArgs)
 		if err == nil {
 			t.Logf("Docker conversion succeeded unexpectedly")
 		}
@@ -2766,7 +2766,7 @@ func TestConvertFlac(t *testing.T) {
 		config.NoPreserveMetadata = true
 		bitrateArgs := []string{"-b", "16"}
 		sampleRateArgs := []string{"rate", "-v", "-L", "44100"}
-		err := convertFlac(sourcePath, targetPath, bitrateArgs, sampleRateArgs)
+		err := processFlac(sourcePath, targetPath, true, bitrateArgs, sampleRateArgs)
 		if err == nil {
 			t.Error("Expected error on sox failure")
 		}

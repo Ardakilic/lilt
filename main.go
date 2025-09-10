@@ -207,7 +207,7 @@ func processAudioFiles() error {
 
 		if needsConversion {
 			fmt.Printf("Converting FLAC: %s\n", path)
-			if err := convertFlac(path, targetPath, bitrateArgs, sampleRateArgs); err != nil {
+			if err := processFlac(path, targetPath, needsConversion, bitrateArgs, sampleRateArgs); err != nil {
 				fmt.Printf("Error: Sox conversion failed. Copying original file instead. Error: %v\n", err)
 				return copyFile(path, targetPath)
 			}
@@ -292,10 +292,7 @@ func determineConversion(info *AudioInfo) (bool, []string, []string) {
 	return needsConversion, bitrateArgs, sampleRateArgs
 }
 
-func convertFlac(sourcePath, targetPath string, bitrateArgs, sampleRateArgs []string) error {
-	// Determine if conversion is actually needed (for metadata preservation logic)
-	needsConversion := len(bitrateArgs) > 0 || len(sampleRateArgs) > 3
-
+func processFlac(sourcePath, targetPath string, needsConversion bool, bitrateArgs, sampleRateArgs []string) error {
 	if !needsConversion {
 		return copyFile(sourcePath, targetPath)
 	}
@@ -376,7 +373,7 @@ func normalizeForDocker(base, path string) string {
 	// Convert backslashes to forward slashes first
 	base = strings.ReplaceAll(base, "\\", "/")
 	path = strings.ReplaceAll(path, "\\", "/")
-	
+
 	// Try to use filepath.VolumeName
 	volBase := filepath.VolumeName(base)
 	baseStripped := base
@@ -388,7 +385,7 @@ func normalizeForDocker(base, path string) string {
 			baseStripped = base[3:]
 		}
 	}
-	
+
 	volPath := filepath.VolumeName(path)
 	pathStripped := path
 	if volPath != "" {
@@ -398,7 +395,7 @@ func normalizeForDocker(base, path string) string {
 			pathStripped = path[3:]
 		}
 	}
-	
+
 	rel, err := filepath.Rel(baseStripped, pathStripped)
 	if err != nil {
 		return filepath.ToSlash(pathStripped)
