@@ -1500,7 +1500,7 @@ func TestConversionFormatValidation(t *testing.T) {
 			needsConversion, bitrateArgs, sampleRateArgs := determineConversion(&audioInfo)
 
 			// Test that conversion determination works correctly
-			expectedConversion := tc.inputBits > 16 || tc.inputRate > 48000
+			expectedConversion := tc.inputBits > 16 || tc.inputRate == 88200 || tc.inputRate == 176400 || tc.inputRate == 352800 || tc.inputRate == 96000 || tc.inputRate == 192000 || tc.inputRate == 384000
 			if needsConversion != expectedConversion {
 				t.Errorf("Expected conversion %v, got %v", expectedConversion, needsConversion)
 			}
@@ -2960,7 +2960,8 @@ func TestProcessFlacMetadataFallback(t *testing.T) {
 	}
 
 	// Verify no temp left behind
-	tempPath := targetPath + ".tmp"
+	ext := filepath.Ext(targetPath)
+	tempPath := strings.TrimSuffix(targetPath, ext) + ".tmp" + ext
 	if _, err := os.Stat(tempPath); !os.IsNotExist(err) {
 		t.Error("Temp file should be cleaned up on sox failure")
 	}
