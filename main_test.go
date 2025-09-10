@@ -59,6 +59,12 @@ func createMockClient(responses map[string]*http.Response, err error) *http.Clie
 }
 
 // createGitHubReleaseResponse creates a mock GitHub API response for a release
+// Parameters:
+//   - version: The version string to include in the response body (e.g., "v1.0.0", "v2.1.3")
+//     This will be used as the "tag_name" field in the JSON response when statusCode is 200
+//   - statusCode: The HTTP status code for the response (e.g., http.StatusOK, http.StatusNotFound)
+//     When statusCode is http.StatusOK (200), returns a valid JSON response with the version
+//     For any other status code, returns a generic "Error" body
 func createGitHubReleaseResponse(version string, statusCode int) *http.Response {
 	var body string
 	if statusCode == http.StatusOK {
@@ -75,6 +81,16 @@ func createGitHubReleaseResponse(version string, statusCode int) *http.Response 
 }
 
 // createMockClientForSelfUpdate creates a mock client for self-update tests with common responses
+// This function sets up a mock HTTP client that intercepts requests to GitHub's releases API
+// and returns predefined responses, eliminating the need for real network requests during testing.
+// Parameters:
+//   - latestVersion: The version string to return as the latest release (e.g., "v1.0.0", "v2.1.3")
+//     This simulates what GitHub's API would return for the latest release tag
+//   - statusCode: The HTTP status code for the API response (e.g., http.StatusOK, http.StatusNotFound, http.StatusForbidden)
+//     When statusCode is http.StatusOK (200), returns a valid JSON response with the version
+//     For other status codes, simulates API errors like rate limiting or not found
+//
+// Returns: A configured *http.Client with mock transport that responds to GitHub API URLs
 func createMockClientForSelfUpdate(latestVersion string, statusCode int) *http.Client {
 	apiURL := "https://api.github.com/repos/Ardakilic/lilt/releases/latest"
 	responses := map[string]*http.Response{
