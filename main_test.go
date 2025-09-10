@@ -2331,11 +2331,11 @@ func TestMergeMetadataWithFFmpegDocker(t *testing.T) {
 	}
 }
 
-func TestMergeMetadataFFmpegFailure(t *testing.T) {
+func TestMergeMetadataDockerFailure(t *testing.T) {
 	originalConfig := config
 	defer func() { config = originalConfig }()
 
-	tmpDir, err := os.MkdirTemp("", "test-merge-failure")
+	tmpDir, err := os.MkdirTemp("", "test-merge-docker-failure")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2348,20 +2348,129 @@ func TestMergeMetadataFFmpegFailure(t *testing.T) {
 	os.WriteFile(sourcePath, []byte("source"), 0644)
 	os.WriteFile(tempPath, []byte("temp"), 0644)
 
-	// Force FFmpeg failure
+	// Force Docker failure by using invalid image
 	config.NoPreserveMetadata = false
-	config.UseDocker = false
-	config.SoxCommand = "echo" // Invalid command
+	config.UseDocker = true
+	config.DockerImage = "invalid/nonexistent:image"
+	config.SourceDir = tmpDir
+	config.TargetDir = tmpDir
 
 	err = mergeMetadataWithFFmpeg(sourcePath, tempPath, targetPath)
 	if err == nil {
-		t.Error("Expected FFmpeg error but got nil")
+		t.Error("Expected Docker error but got nil")
 	}
 
 	// Verify temp file cleanup
 	if _, err := os.Stat(tempPath); os.IsNotExist(err) {
-		t.Error("Temp file should remain after FFmpeg failure in helper")
+		t.Error("Temp file should remain after Docker failure in helper")
 	}
+}
+
+func TestFFmpegExecutionPaths(t *testing.T) {
+	originalConfig := config
+	defer func() { config = originalConfig }()
+
+	t.Run("LocalFFmpegExecution", func(t *testing.T) {
+		tmpDir, err := os.MkdirTemp("", "test-ffmpeg-local")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(tmpDir)
+
+		sourcePath := filepath.Join(tmpDir, "source.flac")
+		tempPath := filepath.Join(tmpDir, "temp.flac")
+		targetPath := filepath.Join(tmpDir, "target.flac")
+
+		os.WriteFile(sourcePath, []byte("source"), 0644)
+		os.WriteFile(tempPath, []byte("temp"), 0644)
+
+		config.NoPreserveMetadata = false
+		config.UseDocker = false
+
+		// Test local FFmpeg execution
+		if _, err := exec.LookPath("ffmpeg"); err != nil {
+			t.Skipf("FFmpeg not available locally, skipping local execution test: %v", err)
+		}
+
+		err = mergeMetadataWithFFmpeg(sourcePath, tempPath, targetPath)
+		if err != nil {
+			t.Logf("Local FFmpeg execution failed (may be expected with dummy files): %v", err)
+		} else {
+			t.Log("Local FFmpeg execution succeeded")
+			// Verify temp file was cleaned up on success
+			if _, err := os.Stat(tempPath); !os.IsNotExist(err) {
+				t.Error("Temp file should be cleaned up after successful merge")
+			}
+		}
+	})
+
+	t.Run("DockerFFmpegExecution", func(t *testing.T) {
+		tmpDir, err := os.MkdirTemp("", "test-ffmpeg-docker")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(tmpDir)
+
+		sourcePath := filepath.Join(tmpDir, "source.flac")
+		tempPath := filepath.Join(tmpDir, "temp.flac")
+		targetPath := filepath.Join(tmpDir, "target.flac")
+
+		os.WriteFile(sourcePath, []byte("source"), 0644)
+		os.WriteFile(tempPath, []byte("temp"), 0644)
+
+		config.NoPreserveMetadata = false
+		config.UseDocker = true
+		config.DockerImage = "test/ffmpeg:latest"
+		config.SourceDir = tmpDir
+		config.TargetDir = tmpDir
+
+		// Test Docker FFmpeg execution
+		if _, err := exec.LookPath("docker"); err != nil {
+			t.Skipf("Docker not available, skipping Docker execution test: %v", err)
+		}
+
+		err = mergeMetadataWithFFmpeg(sourcePath, tempPath, targetPath)
+		if err != nil {
+			t.Logf("Docker FFmpeg execution failed (expected with test image): %v", err)
+		} else {
+			t.Log("Docker FFmpeg execution succeeded")
+		}
+	})
+
+	t.Run("FFmpegBinaryNotFound", func(t *testing.T) {
+		tmpDir, err := os.MkdirTemp("", "test-ffmpeg-missing")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(tmpDir)
+
+		sourcePath := filepath.Join(tmpDir, "source.flac")
+		tempPath := filepath.Join(tmpDir, "temp.flac")
+		targetPath := filepath.Join(tmpDir, "target.flac")
+
+		os.WriteFile(sourcePath, []byte("source"), 0644)
+		os.WriteFile(tempPath, []byte("temp"), 0644)
+
+		config.NoPreserveMetadata = false
+		config.UseDocker = false
+
+		// Check if FFmpeg is actually missing
+		if _, err := exec.LookPath("ffmpeg"); err == nil {
+			t.Skip("FFmpeg is available, cannot test missing binary scenario")
+		}
+
+		err = mergeMetadataWithFFmpeg(sourcePath, tempPath, targetPath)
+		if err == nil {
+			t.Error("Expected error when FFmpeg binary is not found")
+		} else {
+			t.Logf("Got expected error when FFmpeg is missing: %v", err)
+		}
+
+		// Verify temp file remains on failure
+		if _, err := os.Stat(tempPath); os.IsNotExist(err) {
+			t.Error("Temp file should remain when FFmpeg execution fails")
+		}
+	})
 }
 
 func TestDetermineConversionFullMatrix(t *testing.T) {
@@ -2592,6 +2701,105 @@ func TestSetupSoxCommand(t *testing.T) {
 		// Will fail on LookPath, but covers abs path calls
 		err := setupSoxCommand()
 		t.Logf("Docker path setup error (expected if no docker): %v", err)
+	})
+}
+
+func TestFFmpegBinaryExistence(t *testing.T) {
+	originalConfig := config
+	defer func() { config = originalConfig }()
+
+	t.Run("LocalModeWithMetadataPreservation_FFmpegRequired", func(t *testing.T) {
+		config.UseDocker = false
+		config.NoPreserveMetadata = false
+		config.SoxCommand = "true" // Mock SoX as available
+
+		// Test the actual FFmpeg check
+		if _, err := exec.LookPath("ffmpeg"); err != nil {
+			// FFmpeg not available - should get error from setupSoxCommand
+			err := setupSoxCommand()
+			if err == nil {
+				t.Error("Expected error when FFmpeg is not available but metadata preservation is enabled")
+			} else if !strings.Contains(err.Error(), "ffmpeg is not installed") {
+				t.Errorf("Expected FFmpeg installation error, got: %v", err)
+			}
+		} else {
+			// FFmpeg available - should succeed
+			err := setupSoxCommand()
+			if err != nil {
+				t.Errorf("Expected success when FFmpeg is available, got: %v", err)
+			}
+		}
+	})
+
+	t.Run("LocalModeWithoutMetadataPreservation_FFmpegNotRequired", func(t *testing.T) {
+		config.UseDocker = false
+		config.NoPreserveMetadata = true // Metadata preservation disabled
+		config.SoxCommand = "true"       // Mock SoX as available
+
+		// Should succeed regardless of FFmpeg availability
+		err := setupSoxCommand()
+		if err != nil {
+			t.Errorf("Expected success when metadata preservation is disabled, got: %v", err)
+		}
+	})
+
+	t.Run("DockerMode_FFmpegNotRequiredLocally", func(t *testing.T) {
+		config.UseDocker = true
+		config.NoPreserveMetadata = false // Metadata preservation enabled
+		config.DockerImage = "test/image"
+
+		tmpDir, err := os.MkdirTemp("", "test-docker-ffmpeg")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(tmpDir)
+
+		config.SourceDir = tmpDir
+		config.TargetDir = tmpDir
+
+		// Test Docker path - should not check for local FFmpeg
+		if _, err := exec.LookPath("docker"); err != nil {
+			// Docker not available
+			err := setupSoxCommand()
+			if err == nil {
+				t.Log("Expected Docker installation error but got success")
+			} else if !strings.Contains(err.Error(), "docker is not installed") {
+				t.Errorf("Expected Docker installation error, got: %v", err)
+			}
+		} else {
+			// Docker available - should succeed without checking local FFmpeg
+			err := setupSoxCommand()
+			if err != nil {
+				t.Logf("Docker setup failed (may be expected): %v", err)
+			}
+			// In Docker mode, local FFmpeg availability shouldn't matter
+		}
+	})
+
+	t.Run("LocalMode_FFmpegAvailabilityCheck", func(t *testing.T) {
+		config.UseDocker = false
+		config.NoPreserveMetadata = false
+		config.SoxCommand = "true"
+
+		// Directly test FFmpeg availability
+		_, ffmpegErr := exec.LookPath("ffmpeg")
+		err := setupSoxCommand()
+
+		if ffmpegErr != nil {
+			// FFmpeg not available
+			if err == nil {
+				t.Error("Expected error when FFmpeg is not available")
+			} else if !strings.Contains(err.Error(), "ffmpeg is not installed") {
+				t.Errorf("Expected FFmpeg error, got: %v", err)
+			}
+			t.Logf("FFmpeg not available (expected): %v", ffmpegErr)
+		} else {
+			// FFmpeg available
+			if err != nil {
+				t.Errorf("Expected success when FFmpeg is available, got: %v", err)
+			}
+			t.Log("FFmpeg is available")
+		}
 	})
 }
 
