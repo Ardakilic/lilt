@@ -2004,20 +2004,27 @@ func TestWindowsPathHandling(t *testing.T) {
 	defer func() { config = originalConfig }()
 
 	config.UseDocker = true
-	config.SourceDir = `C:\Users\test\music`
-	config.TargetDir = `C:\Users\test\output`
+
+	// Use cross-platform path construction for test paths
+	sourceDir := filepath.Join("C:", "Users", "test", "music")
+	targetDir := filepath.Join("C:", "Users", "test", "output")
+	sourcePath := filepath.Join(sourceDir, "song.flac")
+	targetPath := filepath.Join(targetDir, "song.flac")
+
+	config.SourceDir = sourceDir
+	config.TargetDir = targetDir
 
 	// Test path conversions
-	dockerPath := getDockerPath(`C:\Users\test\music\song.flac`)
+	dockerPath := getDockerPath(sourcePath)
 	expected := "/source/song.flac"
 	if dockerPath != expected {
 		t.Errorf("Windows path conversion failed. Expected: %s, Got: %s", expected, dockerPath)
 	}
 
-	targetPath := getDockerTargetPath(`C:\Users\test\output\song.flac`)
+	dockerTargetPath := getDockerTargetPath(targetPath)
 	expectedTarget := "/target/song.flac"
-	if targetPath != expectedTarget {
-		t.Errorf("Windows target path conversion failed. Expected: %s, Got: %s", expectedTarget, targetPath)
+	if dockerTargetPath != expectedTarget {
+		t.Errorf("Windows target path conversion failed. Expected: %s, Got: %s", expectedTarget, dockerTargetPath)
 	}
 }
 
