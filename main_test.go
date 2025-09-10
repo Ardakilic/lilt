@@ -41,6 +41,7 @@ func (m *mockTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 	}
 
+	// If still no match, return a default 404 response to prevent real requests
 	if !ok {
 		resp = &http.Response{
 			StatusCode: http.StatusNotFound,
@@ -55,6 +56,32 @@ func (m *mockTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 func createMockClient(responses map[string]*http.Response, err error) *http.Client {
 	transport := &mockTransport{responses: responses, err: err}
 	return &http.Client{Transport: transport}
+}
+
+// createGitHubReleaseResponse creates a mock GitHub API response for a release
+func createGitHubReleaseResponse(version string, statusCode int) *http.Response {
+	var body string
+	if statusCode == http.StatusOK {
+		body = fmt.Sprintf(`{"tag_name": "%s"}`, version)
+	} else {
+		body = "Error"
+	}
+
+	return &http.Response{
+		StatusCode: statusCode,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     make(http.Header),
+	}
+}
+
+// createMockClientForSelfUpdate creates a mock client for self-update tests with common responses
+func createMockClientForSelfUpdate(latestVersion string, statusCode int) *http.Client {
+	apiURL := "https://api.github.com/repos/Ardakilic/lilt/releases/latest"
+	responses := map[string]*http.Response{
+		apiURL:   createGitHubReleaseResponse(latestVersion, statusCode),
+		"latest": createGitHubReleaseResponse(latestVersion, statusCode),
+	}
+	return createMockClient(responses, nil)
 }
 
 // captureOutput captures stdout output during test execution
@@ -131,7 +158,7 @@ Sample Encoding: 16-bit Signed Integer PCM`,
 
 func TestCopyFile(t *testing.T) {
 	// Create a temporary directory for testing
-	tmpDir, err := os.MkdirTemp("", "flac-converter-test")
+	tmpDir, err := os.MkdirTemp("", "lilt-test")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
@@ -260,9 +287,12 @@ func TestSelfUpdateFetchLatest(t *testing.T) {
 	version = "dev"
 	defer func() { version = originalVersion }()
 
+	// Mock client for dev version test (no requests should be made)
+	mockClient := createMockClient(nil, nil)
+
 	var err error
 	output, captureErr := captureOutput(func() {
-		err = selfUpdate(http.DefaultClient)
+		err = selfUpdate(mockClient)
 	})
 	if captureErr != nil {
 		t.Fatalf("Failed to capture output: %v", captureErr)
@@ -290,7 +320,7 @@ func TestExtractTarGZ(t *testing.T) {
 	tw := tar.NewWriter(gw)
 
 	header := &tar.Header{
-		Name: "flac-converter-linux-amd64",
+		Name: "lilt-linux-amd64",
 		Mode: 0755,
 		Size: 100,
 	}
@@ -328,7 +358,7 @@ func TestExtractTarGZ(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if header.Typeflag == tar.TypeReg && filepath.Base(header.Name) == "flac-converter-"+goos+"-"+goarch {
+		if header.Typeflag == tar.TypeReg && filepath.Base(header.Name) == "lilt-"+goos+"-"+goarch {
 			found = true
 			break
 		}
@@ -348,7 +378,7 @@ func TestExtractZip(t *testing.T) {
 	// Create a sample zip
 	buf := new(bytes.Buffer)
 	zw := zip.NewWriter(buf)
-	f, err := zw.Create("flac-converter-windows-amd64.exe")
+	f, err := zw.Create("lilt-windows-amd64.exe")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,7 +397,7 @@ func TestExtractZip(t *testing.T) {
 
 	found := false
 	for _, f := range r.File {
-		if f.Name == "flac-converter-windows-amd64.exe" {
+		if f.Name == "lilt-windows-amd64.exe" {
 			found = true
 			break
 		}
@@ -604,7 +634,7 @@ func TestSelfUpdateNetworkFailure(t *testing.T) {
 	if !strings.Contains(output, "Failed to check for updates from") {
 		t.Error("Expected failure message in output")
 	}
-	if !strings.Contains(output, "Please visit https://github.com/Ardakilic/flac-to-16bit-converter") {
+	if !strings.Contains(output, "Please visit https://github.com/Ardakilic/lilt") {
 		t.Error("Expected fallback instructions in output")
 	}
 }
@@ -616,16 +646,8 @@ func TestSelfUpdateUpToDate(t *testing.T) {
 	version = "v1.0.0"
 	defer func() { version = originalVersion }()
 
-	// Mock response with same version
-	apiURL := "https://api.github.com/repos/Ardakilic/flac-to-16bit-converter/releases/latest"
-	respBody := `{"tag_name": "v1.0.0"}`
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Body:       io.NopCloser(strings.NewReader(respBody)),
-		Header:     make(http.Header),
-	}
-	responses := map[string]*http.Response{apiURL: resp}
-	mockClient := createMockClient(responses, nil)
+	// Use mock client instead of hardcoded responses
+	mockClient := createMockClientForSelfUpdate("v1.0.0", http.StatusOK)
 
 	var err error
 	output, captureErr := captureOutput(func() {
@@ -816,10 +838,12 @@ func TestSelfUpdateDevVersion(t *testing.T) {
 	version = "dev"
 	defer func() { version = originalVersion }()
 
-	// Use default client, but since dev version skips, no request
+	// Use mock client, but since dev version skips, no request
+	mockClient := createMockClient(nil, nil)
+
 	var err error
 	output, captureErr := captureOutput(func() {
-		err = selfUpdate(http.DefaultClient)
+		err = selfUpdate(mockClient)
 	})
 	if captureErr != nil {
 		t.Fatalf("Failed to capture output: %v", captureErr)
@@ -839,16 +863,8 @@ func TestSelfUpdateSameVersion(t *testing.T) {
 	version = "v1.0.0"
 	defer func() { version = originalVersion }()
 
-	// Mock response with same version
-	apiURL := "https://api.github.com/repos/Ardakilic/flac-to-16bit-converter/releases/latest"
-	respBody := `{"tag_name": "v1.0.0"}`
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Body:       io.NopCloser(strings.NewReader(respBody)),
-		Header:     make(http.Header),
-	}
-	responses := map[string]*http.Response{apiURL: resp}
-	mockClient := createMockClient(responses, nil)
+	// Use mock client helper
+	mockClient := createMockClientForSelfUpdate("v1.0.0", http.StatusOK)
 
 	var err error
 	output, captureErr := captureOutput(func() {
@@ -872,16 +888,8 @@ func TestSelfUpdateNewerLocalVersion(t *testing.T) {
 	version = "v2.0.0"
 	defer func() { version = originalVersion }()
 
-	// Mock response with older version
-	apiURL := "https://api.github.com/repos/Ardakilic/flac-to-16bit-converter/releases/latest"
-	respBody := `{"tag_name": "v1.0.0"}`
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Body:       io.NopCloser(strings.NewReader(respBody)),
-		Header:     make(http.Header),
-	}
-	responses := map[string]*http.Response{apiURL: resp}
-	mockClient := createMockClient(responses, nil)
+	// Use mock client helper with older version
+	mockClient := createMockClientForSelfUpdate("v1.0.0", http.StatusOK)
 
 	var err error
 	output, captureErr := captureOutput(func() {
@@ -905,16 +913,8 @@ func TestSelfUpdateInvalidVersion(t *testing.T) {
 	version = "invalid-version"
 	defer func() { version = originalVersion }()
 
-	// Mock response with valid version
-	apiURL := "https://api.github.com/repos/Ardakilic/flac-to-16bit-converter/releases/latest"
-	respBody := `{"tag_name": "v1.0.0"}`
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Body:       io.NopCloser(strings.NewReader(respBody)),
-		Header:     make(http.Header),
-	}
-	responses := map[string]*http.Response{apiURL: resp}
-	mockClient := createMockClient(responses, nil)
+	// Use mock client helper
+	mockClient := createMockClientForSelfUpdate("v1.0.0", http.StatusOK)
 
 	var err error
 	output, captureErr := captureOutput(func() {
@@ -1947,7 +1947,7 @@ func TestSelfUpdateHTTPError(t *testing.T) {
 	if !strings.Contains(output, "Failed to check for updates from") {
 		t.Error("Expected HTTP failure message")
 	}
-	if !strings.Contains(output, "Please visit https://github.com/Ardakilic/flac-to-16bit-converter") {
+	if !strings.Contains(output, "Please visit https://github.com/Ardakilic/lilt") {
 		t.Error("Expected fallback instructions in output")
 	}
 }
@@ -2033,15 +2033,8 @@ func TestSelfUpdateBadStatusCode(t *testing.T) {
 	version = "v1.0.0"
 	defer func() { version = originalVersion }()
 
-	// Mock 500 status
-	apiURL := "https://api.github.com/repos/Ardakilic/flac-to-16bit-converter/releases/latest"
-	resp := &http.Response{
-		StatusCode: http.StatusInternalServerError,
-		Body:       io.NopCloser(strings.NewReader("Server Error")),
-		Header:     make(http.Header),
-	}
-	responses := map[string]*http.Response{apiURL: resp}
-	mockClient := createMockClient(responses, nil)
+	// Use mock client helper with error status code
+	mockClient := createMockClientForSelfUpdate("", http.StatusInternalServerError)
 
 	var err error
 	output, captureErr := captureOutput(func() {
@@ -2068,14 +2061,17 @@ func TestSelfUpdateJSONParseError(t *testing.T) {
 	version = "v1.0.0"
 	defer func() { version = originalVersion }()
 
-	// Mock invalid JSON
-	apiURL := "https://api.github.com/repos/Ardakilic/flac-to-16bit-converter/releases/latest"
+	// Mock invalid JSON response
+	apiURL := "https://api.github.com/repos/Ardakilic/lilt/releases/latest"
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Body:       io.NopCloser(strings.NewReader("invalid json {")),
 		Header:     make(http.Header),
 	}
-	responses := map[string]*http.Response{apiURL: resp}
+	responses := map[string]*http.Response{
+		apiURL:   resp,
+		"latest": resp,
+	}
 	mockClient := createMockClient(responses, nil)
 
 	var err error
@@ -2100,19 +2096,21 @@ func TestSelfUpdateDownloadFailure(t *testing.T) {
 	version = "v0.9.0" // Older version to trigger download
 	defer func() { version = originalVersion }()
 
-	// Mock API success, but download error
-	apiURL := "https://api.github.com/repos/Ardakilic/flac-to-16bit-converter/releases/latest"
+	// Mock API success, but download failure (404 for asset URL)
+	apiURL := "https://api.github.com/repos/Ardakilic/lilt/releases/latest"
 	respBody := `{"tag_name": "v1.0.0"}`
 	apiResp := &http.Response{
 		StatusCode: http.StatusOK,
 		Body:       io.NopCloser(strings.NewReader(respBody)),
 		Header:     make(http.Header),
 	}
-	// For download, return error
-	responses := map[string]*http.Response{apiURL: apiResp}
-	mockClient := createMockClient(responses, nil) // But for assetURL, since not in map, it will 404, but to simulate error, set transport err for second call? Wait, since it's the same client, but responses don't have assetURL, it will 404.
+	// For download URL, let it 404 (not in responses map)
+	responses := map[string]*http.Response{
+		apiURL:   apiResp,
+		"latest": apiResp,
+	}
+	mockClient := createMockClient(responses, nil)
 
-	// To simulate download error, use a transport that errors on second call, but for simplicity, let it 404
 	var err error
 	output, captureErr := captureOutput(func() {
 		err = selfUpdate(mockClient)
@@ -2142,7 +2140,7 @@ func TestSelfUpdateTempFileCreation(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	// Create a mock temp file to test the creation logic
-	tempFile, err := os.CreateTemp(tmpDir, "flac-converter-update-*")
+	tempFile, err := os.CreateTemp(tmpDir, "lilt-update-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2175,7 +2173,7 @@ func TestSelfUpdateTempDirCreation(t *testing.T) {
 	defer os.RemoveAll(tmpDir)
 
 	// Create a mock temp directory
-	tempDir, err := os.MkdirTemp(tmpDir, "flac-converter-extract-*")
+	tempDir, err := os.MkdirTemp(tmpDir, "lilt-extract-*")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2329,19 +2327,19 @@ func TestSelfUpdateAssetURLConstruction(t *testing.T) {
 			goos:     "darwin",
 			goarch:   "arm64",
 			version:  "v1.0.0",
-			expected: "https://github.com/Ardakilic/flac-to-16bit-converter/releases/download/v1.0.0/flac-converter-darwin-arm64.tar.gz",
+			expected: "https://github.com/Ardakilic/lilt/releases/download/v1.0.0/lilt-darwin-arm64.tar.gz",
 		},
 		{
 			goos:     "windows",
 			goarch:   "amd64",
 			version:  "v1.0.0",
-			expected: "https://github.com/Ardakilic/flac-to-16bit-converter/releases/download/v1.0.0/flac-converter-windows-amd64.exe.zip",
+			expected: "https://github.com/Ardakilic/lilt/releases/download/v1.0.0/lilt-windows-amd64.exe.zip",
 		},
 		{
 			goos:     "linux",
 			goarch:   "amd64",
 			version:  "v2.1.0",
-			expected: "https://github.com/Ardakilic/flac-to-16bit-converter/releases/download/v2.1.0/flac-converter-linux-amd64.tar.gz",
+			expected: "https://github.com/Ardakilic/lilt/releases/download/v2.1.0/lilt-linux-amd64.tar.gz",
 		},
 	}
 
@@ -2349,12 +2347,12 @@ func TestSelfUpdateAssetURLConstruction(t *testing.T) {
 		t.Run(fmt.Sprintf("%s-%s-%s", tc.goos, tc.goarch, tc.version), func(t *testing.T) {
 			var filename string
 			if tc.goos == "windows" {
-				filename = fmt.Sprintf("flac-converter-%s-%s.exe.zip", tc.goos, tc.goarch)
+				filename = fmt.Sprintf("lilt-%s-%s.exe.zip", tc.goos, tc.goarch)
 			} else {
-				filename = fmt.Sprintf("flac-converter-%s-%s.tar.gz", tc.goos, tc.goarch)
+				filename = fmt.Sprintf("lilt-%s-%s.tar.gz", tc.goos, tc.goarch)
 			}
 
-			assetURL := fmt.Sprintf("https://github.com/Ardakilic/flac-to-16bit-converter/releases/download/%s/%s", tc.version, filename)
+			assetURL := fmt.Sprintf("https://github.com/Ardakilic/lilt/releases/download/%s/%s", tc.version, filename)
 
 			if assetURL != tc.expected {
 				t.Errorf("Expected URL %s, got %s", tc.expected, assetURL)
@@ -2370,15 +2368,15 @@ func TestSelfUpdateBinaryNameConstruction(t *testing.T) {
 		goarch   string
 		expected string
 	}{
-		{"darwin", "arm64", "flac-converter-darwin-arm64"},
-		{"linux", "amd64", "flac-converter-linux-amd64"},
-		{"windows", "amd64", "flac-converter-windows-amd64.exe"},
-		{"linux", "arm64", "flac-converter-linux-arm64"},
+		{"darwin", "arm64", "lilt-darwin-arm64"},
+		{"linux", "amd64", "lilt-linux-amd64"},
+		{"windows", "amd64", "lilt-windows-amd64.exe"},
+		{"linux", "arm64", "lilt-linux-arm64"},
 	}
 
 	for _, tc := range testCases {
 		t.Run(fmt.Sprintf("%s-%s", tc.goos, tc.goarch), func(t *testing.T) {
-			binaryName := "flac-converter-" + tc.goos + "-" + tc.goarch
+			binaryName := "lilt-" + tc.goos + "-" + tc.goarch
 			if tc.goos == "windows" {
 				binaryName += ".exe"
 			}
@@ -2400,9 +2398,9 @@ func TestSelfUpdatePlatformDetection(t *testing.T) {
 		expectedExt := ".tar.gz"
 		var filename string
 		if currentGOOS == "windows" {
-			filename = fmt.Sprintf("flac-converter-%s-%s.exe.zip", currentGOOS, currentGOARCH)
+			filename = fmt.Sprintf("lilt-%s-%s.exe.zip", currentGOOS, currentGOARCH)
 		} else {
-			filename = fmt.Sprintf("flac-converter-%s-%s.tar.gz", currentGOOS, currentGOARCH)
+			filename = fmt.Sprintf("lilt-%s-%s.tar.gz", currentGOOS, currentGOARCH)
 		}
 
 		if !strings.HasSuffix(filename, expectedExt) {
@@ -2415,9 +2413,9 @@ func TestSelfUpdatePlatformDetection(t *testing.T) {
 		expectedExt := ".exe.zip"
 		var filename string
 		if currentGOOS == "windows" {
-			filename = fmt.Sprintf("flac-converter-%s-%s.exe.zip", currentGOOS, currentGOARCH)
+			filename = fmt.Sprintf("lilt-%s-%s.exe.zip", currentGOOS, currentGOARCH)
 		} else {
-			filename = fmt.Sprintf("flac-converter-%s-%s.tar.gz", currentGOOS, currentGOARCH)
+			filename = fmt.Sprintf("lilt-%s-%s.tar.gz", currentGOOS, currentGOARCH)
 		}
 
 		if !strings.HasSuffix(filename, expectedExt) {
@@ -2437,22 +2435,22 @@ func TestSelfUpdateExtractionLogic(t *testing.T) {
 	// Test Unix extraction path
 	goos := "linux"
 	goarch := "amd64"
-	binaryName := "flac-converter-" + goos + "-" + goarch
+	binaryName := "lilt-" + goos + "-" + goarch
 
 	// Verify the binary name construction logic
-	expectedBinaryName := "flac-converter-linux-amd64"
+	expectedBinaryName := "lilt-linux-amd64"
 	if binaryName != expectedBinaryName {
 		t.Errorf("Expected binary name %s, got %s", expectedBinaryName, binaryName)
 	}
 
 	// Test Windows extraction path
 	goos = "windows"
-	binaryName = "flac-converter-" + goos + "-" + goarch
+	binaryName = "lilt-" + goos + "-" + goarch
 	if goos == "windows" {
 		binaryName += ".exe"
 	}
 
-	expectedBinaryName = "flac-converter-windows-amd64.exe"
+	expectedBinaryName = "lilt-windows-amd64.exe"
 	if binaryName != expectedBinaryName {
 		t.Errorf("Expected Windows binary name %s, got %s", expectedBinaryName, binaryName)
 	}
@@ -2460,10 +2458,10 @@ func TestSelfUpdateExtractionLogic(t *testing.T) {
 
 func TestSelfUpdateErrorMessages(t *testing.T) {
 	// Test that error messages contain expected fallback instructions
-	fallbackMessage := "Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update."
+	fallbackMessage := "Please visit https://github.com/Ardakilic/lilt to check the latest version manually and run the install.sh command to update."
 
 	// Test that fallback message contains expected elements
-	if !strings.Contains(fallbackMessage, "github.com/Ardakilic/flac-to-16bit-converter") {
+	if !strings.Contains(fallbackMessage, "github.com/Ardakilic/lilt") {
 		t.Errorf("Fallback message should contain repository URL")
 	}
 	if !strings.Contains(fallbackMessage, "install.sh") {
@@ -2491,10 +2489,10 @@ func TestSelfUpdateCurrentPathResolution(t *testing.T) {
 
 func TestSelfUpdateBackupFileNaming(t *testing.T) {
 	// Test backup file naming convention
-	currentPath := "/usr/local/bin/flac-converter"
+	currentPath := "/usr/local/bin/lilt"
 	backupPath := currentPath + ".old"
 
-	expectedBackup := "/usr/local/bin/flac-converter.old"
+	expectedBackup := "/usr/local/bin/lilt.old"
 	if backupPath != expectedBackup {
 		t.Errorf("Expected backup path %s, got %s", expectedBackup, backupPath)
 	}
@@ -2504,13 +2502,13 @@ func TestSelfUpdateHTTP403ErrorMessage(t *testing.T) {
 	// Test that HTTP 403 errors show the specific rate limiting message
 	// This test verifies the error message format for forbidden responses
 
-	apiURL := "https://api.github.com/repos/Ardakilic/flac-to-16bit-converter/releases/latest"
+	apiURL := "https://api.github.com/repos/Ardakilic/lilt/releases/latest"
 
 	// The actual HTTP 403 error would be caught by the real API call,
 	// but we can test the message format logic
 	testMessage := fmt.Sprintf("Checking for updates from: %s\n", apiURL)
 	testMessage += fmt.Sprintf("Failed to fetch release info from %s: HTTP 403 (Forbidden)\n", apiURL)
-	testMessage += "This may be due to GitHub API rate limiting. Please wait a few minutes and try again, or visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update."
+	testMessage += "This may be due to GitHub API rate limiting. Please wait a few minutes and try again, or visit https://github.com/Ardakilic/lilt to check the latest version manually and run the install.sh command to update."
 
 	// Verify the message contains the expected elements
 	if !strings.Contains(testMessage, "Checking for updates from:") {
@@ -2533,7 +2531,7 @@ func TestSelfUpdateHTTP403ErrorMessage(t *testing.T) {
 		t.Error("Error message should suggest waiting")
 	}
 
-	if !strings.Contains(testMessage, "github.com/Ardakilic/flac-to-16bit-converter") {
+	if !strings.Contains(testMessage, "github.com/Ardakilic/lilt") {
 		t.Error("Error message should contain repository URL")
 	}
 
@@ -2548,7 +2546,7 @@ func TestSelfUpdateURLErrorMessages(t *testing.T) {
 	defer func() { version = originalVersion }()
 
 	// Mock 403 for API
-	apiURL := "https://api.github.com/repos/Ardakilic/flac-to-16bit-converter/releases/latest"
+	apiURL := "https://api.github.com/repos/Ardakilic/lilt/releases/latest"
 	resp403 := &http.Response{
 		StatusCode: http.StatusForbidden,
 		Body:       io.NopCloser(strings.NewReader("Forbidden")),
@@ -3345,7 +3343,7 @@ func TestSelfUpdateFullFlow(t *testing.T) {
 	defer func() { version = originalVersion }()
 
 	// Mock API success with newer version
-	apiURL := "https://api.github.com/repos/Ardakilic/flac-to-16bit-converter/releases/latest"
+	apiURL := "https://api.github.com/repos/Ardakilic/lilt/releases/latest"
 	respBody := `{"tag_name": "v1.1.0"}`
 	apiResp := &http.Response{
 		StatusCode: http.StatusOK,
@@ -3359,22 +3357,22 @@ func TestSelfUpdateFullFlow(t *testing.T) {
 	var assetURL string
 	var dummyArchive []byte
 	if goos == "windows" {
-		assetURL = fmt.Sprintf("https://github.com/Ardakilic/flac-to-16bit-converter/releases/download/v1.1.0/flac-converter-%s-%s.exe.zip", goos, goarch)
+		assetURL = fmt.Sprintf("https://github.com/Ardakilic/lilt/releases/download/v1.1.0/lilt-%s-%s.exe.zip", goos, goarch)
 		// Dummy zip with exe
 		buf := new(bytes.Buffer)
 		zw := zip.NewWriter(buf)
-		f, _ := zw.Create("flac-converter-windows-amd64.exe")
+		f, _ := zw.Create("lilt-windows-amd64.exe")
 		f.Write([]byte("dummy exe"))
 		zw.Close()
 		dummyArchive = buf.Bytes()
 	} else {
-		assetURL = fmt.Sprintf("https://github.com/Ardakilic/flac-to-16bit-converter/releases/download/v1.1.0/flac-converter-%s-%s.tar.gz", goos, goarch)
+		assetURL = fmt.Sprintf("https://github.com/Ardakilic/lilt/releases/download/v1.1.0/lilt-%s-%s.tar.gz", goos, goarch)
 		// Dummy tar.gz
 		buf := new(bytes.Buffer)
 		gw := gzip.NewWriter(buf)
 		tw := tar.NewWriter(gw)
 		header := &tar.Header{
-			Name: "flac-converter-linux-amd64",
+			Name: "lilt-linux-amd64",
 			Mode: 0755,
 			Size: 9,
 		}
@@ -3420,7 +3418,7 @@ func TestSelfUpdateAPI404(t *testing.T) {
 	version = "v1.0.0"
 	defer func() { version = originalVersion }()
 
-	apiURL := "https://api.github.com/repos/Ardakilic/flac-to-16bit-converter/releases/latest"
+	apiURL := "https://api.github.com/repos/Ardakilic/lilt/releases/latest"
 	resp404 := &http.Response{
 		StatusCode: http.StatusNotFound,
 		Body:       io.NopCloser(strings.NewReader("Not Found")),
@@ -3457,7 +3455,7 @@ func TestSelfUpdateInvalidArchive(t *testing.T) {
 	goos := runtime.GOOS
 	goarch := runtime.GOARCH
 
-	apiURL := "https://api.github.com/repos/Ardakilic/flac-to-16bit-converter/releases/latest"
+	apiURL := "https://api.github.com/repos/Ardakilic/lilt/releases/latest"
 	respBody := `{"tag_name": "v1.1.0"}`
 	apiResp := &http.Response{
 		StatusCode: http.StatusOK,
@@ -3465,7 +3463,7 @@ func TestSelfUpdateInvalidArchive(t *testing.T) {
 		Header:     make(http.Header),
 	}
 
-	assetURL := fmt.Sprintf("https://github.com/Ardakilic/flac-to-16bit-converter/releases/download/v1.1.0/flac-converter-%s-%s.tar.gz", goos, goarch)
+	assetURL := fmt.Sprintf("https://github.com/Ardakilic/lilt/releases/download/v1.1.0/lilt-%s-%s.tar.gz", goos, goarch)
 	assetResp := &http.Response{
 		StatusCode: http.StatusOK,
 		Body:       io.NopCloser(strings.NewReader("invalid archive data")),
@@ -3790,7 +3788,7 @@ func TestSelfUpdateCompleteSuccessFlow(t *testing.T) {
 
 	// Add the binary file that matches the expected name for current platform
 	binaryContent := []byte("fake binary content")
-	binaryName := fmt.Sprintf("flac-converter-%s-%s", runtime.GOOS, runtime.GOARCH)
+	binaryName := fmt.Sprintf("lilt-%s-%s", runtime.GOOS, runtime.GOARCH)
 	header := &tar.Header{
 		Name: binaryName,
 		Mode: 0755,

@@ -49,7 +49,7 @@ jobs:
           GOOS=${platform%/*}
           GOARCH=${platform#*/}
           
-          output_name="flac-converter-${GOOS}-${GOARCH}"
+          output_name="lilt-${GOOS}-${GOARCH}"
           if [ "$GOOS" = "windows" ]; then
             output_name="${output_name}.exe"
           fi
@@ -65,7 +65,7 @@ jobs:
         cd dist
         
         # Create tar.gz for Unix-like systems
-        for file in flac-converter-linux-* flac-converter-darwin-*; do
+        for file in lilt-linux-* lilt-darwin-*; do
           if [ -f "$file" ]; then
             tar -czf "${file}.tar.gz" "$file"
             rm "$file"
@@ -73,7 +73,7 @@ jobs:
         done
         
         # Create zip for Windows
-        for file in flac-converter-windows-*.exe; do
+        for file in lilt-windows-*.exe; do
           if [ -f "$file" ]; then
             zip "${file%.exe}.zip" "$file"
             rm "$file"
@@ -85,7 +85,7 @@ jobs:
       with:
         name: Release ${{ github.ref_name }}
         body: |
-          ## FLAC to 16-bit Converter ${{ github.ref_name }}
+          ## Lilt ${{ github.ref_name }}
           
           Cross-platform FLAC to 16-bit audio converter.
           
@@ -93,7 +93,7 @@ jobs:
           
           ### Quick Install (Unix-like systems)
           ```bash
-          curl -sSL https://raw.githubusercontent.com/Ardakilic/flac-to-16bit-converter/main/install.sh | bash
+          curl -sSL https://raw.githubusercontent.com/Ardakilic/lilt/main/install.sh | bash
           ```
         files: dist/*
         draft: false

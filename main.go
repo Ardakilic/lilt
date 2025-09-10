@@ -44,9 +44,9 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "flac-converter <source_directory>",
+	Use:   "lilt <source_directory>",
 	Short: "Convert Hi-Res FLAC files to 16-bit FLAC files",
-	Long: `FLAC to 16-bit Converter
+	Long: `Lilt - FLAC to 16-bit Converter
 
 This tool converts Hi-Res FLAC files to 16-bit FLAC files with a sample rate of 44.1kHz or 48kHz.
 It also copies MP3 files and image files (JPG, PNG) to the target directory.
@@ -587,19 +587,19 @@ func selfUpdate(client *http.Client) error {
 	fmt.Printf("Current version: %s\n", currentVersion)
 
 	// Fetch latest release from GitHub API
-	apiURL := "https://api.github.com/repos/Ardakilic/flac-to-16bit-converter/releases/latest"
+	apiURL := "https://api.github.com/repos/Ardakilic/lilt/releases/latest"
 	fmt.Printf("Checking for updates from: %s\n", apiURL)
 
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
 		fmt.Printf("Failed to create request for %s: %v\n", apiURL, err)
-		fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+		fmt.Println("Please visit https://github.com/Ardakilic/lilt to check the latest version manually and run the install.sh command to update.")
 		return nil
 	}
 	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Printf("Failed to check for updates from %s: %v\n", apiURL, err)
-		fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+		fmt.Println("Please visit https://github.com/Ardakilic/lilt to check the latest version manually and run the install.sh command to update.")
 		return nil
 	}
 	defer resp.Body.Close()
@@ -607,10 +607,10 @@ func selfUpdate(client *http.Client) error {
 	if resp.StatusCode != http.StatusOK {
 		if resp.StatusCode == http.StatusForbidden {
 			fmt.Printf("Failed to fetch release info from %s: HTTP %d (Forbidden)\n", apiURL, resp.StatusCode)
-			fmt.Println("This may be due to GitHub API rate limiting. Please wait a few minutes and try again, or visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+			fmt.Println("This may be due to GitHub API rate limiting. Please wait a few minutes and try again, or visit https://github.com/Ardakilic/lilt to check the latest version manually and run the install.sh command to update.")
 		} else {
 			fmt.Printf("Failed to fetch release info from %s: HTTP %d\n", apiURL, resp.StatusCode)
-			fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+			fmt.Println("Please visit https://github.com/Ardakilic/lilt to check the latest version manually and run the install.sh command to update.")
 		}
 		return nil
 	}
@@ -618,14 +618,14 @@ func selfUpdate(client *http.Client) error {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		fmt.Printf("Failed to read response from %s: %v\n", apiURL, err)
-		fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+		fmt.Println("Please visit https://github.com/Ardakilic/lilt to check the latest version manually and run the install.sh command to update.")
 		return nil
 	}
 
 	var release GitHubRelease
 	if err := json.Unmarshal(body, &release); err != nil {
 		fmt.Printf("Failed to parse release info from %s: %v\n", apiURL, err)
-		fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+		fmt.Println("Please visit https://github.com/Ardakilic/lilt to check the latest version manually and run the install.sh command to update.")
 		return nil
 	}
 
@@ -643,12 +643,12 @@ func selfUpdate(client *http.Client) error {
 		// Construct asset filename
 		var filename string
 		if goos == "windows" {
-			filename = fmt.Sprintf("flac-converter-%s-%s.exe.zip", goos, goarch)
+			filename = fmt.Sprintf("lilt-%s-%s.exe.zip", goos, goarch)
 		} else {
-			filename = fmt.Sprintf("flac-converter-%s-%s.tar.gz", goos, goarch)
+			filename = fmt.Sprintf("lilt-%s-%s.tar.gz", goos, goarch)
 		}
 
-		assetURL := fmt.Sprintf("https://github.com/Ardakilic/flac-to-16bit-converter/releases/download/%s/%s", latestVersion, filename)
+		assetURL := fmt.Sprintf("https://github.com/Ardakilic/lilt/releases/download/%s/%s", latestVersion, filename)
 		fmt.Printf("Downloading from: %s\n", assetURL)
 
 		// Download the asset
@@ -656,28 +656,28 @@ func selfUpdate(client *http.Client) error {
 		downloadReq, err := http.NewRequest("GET", assetURL, nil)
 		if err != nil {
 			fmt.Printf("Failed to create download request for %s: %v\n", assetURL, err)
-			fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+			fmt.Println("Please visit https://github.com/Ardakilic/lilt to check the latest version manually and run the install.sh command to update.")
 			return nil
 		}
 		downloadResp, err := client.Do(downloadReq)
 		if err != nil {
 			fmt.Printf("Failed to download update from %s: %v\n", assetURL, err)
-			fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+			fmt.Println("Please visit https://github.com/Ardakilic/lilt to check the latest version manually and run the install.sh command to update.")
 			return nil
 		}
 		defer downloadResp.Body.Close()
 
 		if downloadResp.StatusCode != http.StatusOK {
 			fmt.Printf("Failed to download update from %s: HTTP %d\n", assetURL, downloadResp.StatusCode)
-			fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+			fmt.Println("Please visit https://github.com/Ardakilic/lilt to check the latest version manually and run the install.sh command to update.")
 			return nil
 		}
 
 		// Create temp file for download
-		tempFile, err := os.CreateTemp("", "flac-converter-update-*")
+		tempFile, err := os.CreateTemp("", "lilt-update-*")
 		if err != nil {
 			fmt.Printf("Failed to create temp file: %v\n", err)
-			fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+			fmt.Println("Please visit https://github.com/Ardakilic/lilt to check the latest version manually and run the install.sh command to update.")
 			return nil
 		}
 		defer os.Remove(tempFile.Name()) // Clean up if error
@@ -685,16 +685,16 @@ func selfUpdate(client *http.Client) error {
 		_, err = io.Copy(tempFile, downloadResp.Body)
 		if err != nil {
 			fmt.Printf("Failed to download update: %v\n", err)
-			fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+			fmt.Println("Please visit https://github.com/Ardakilic/lilt to check the latest version manually and run the install.sh command to update.")
 			return nil
 		}
 		tempFile.Close()
 
 		// Create temp dir for extraction
-		tempDir, err := os.MkdirTemp("", "flac-converter-extract-*")
+		tempDir, err := os.MkdirTemp("", "lilt-extract-*")
 		if err != nil {
 			fmt.Printf("Failed to create temp dir: %v\n", err)
-			fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+			fmt.Println("Please visit https://github.com/Ardakilic/lilt to check the latest version manually and run the install.sh command to update.")
 			return nil
 		}
 		defer os.RemoveAll(tempDir) // Clean up if error
@@ -705,7 +705,7 @@ func selfUpdate(client *http.Client) error {
 			r, err := zip.OpenReader(tempFile.Name())
 			if err != nil {
 				fmt.Printf("Failed to open zip: %v\n", err)
-				fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+				fmt.Println("Please visit https://github.com/Ardakilic/lilt to check the latest version manually and run the install.sh command to update.")
 				return nil
 			}
 			defer r.Close()
@@ -739,7 +739,7 @@ func selfUpdate(client *http.Client) error {
 			file, err := os.Open(tempFile.Name())
 			if err != nil {
 				fmt.Printf("Failed to open tar.gz: %v\n", err)
-				fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+				fmt.Println("Please visit https://github.com/Ardakilic/lilt to check the latest version manually and run the install.sh command to update.")
 				return nil
 			}
 			defer file.Close()
@@ -747,7 +747,7 @@ func selfUpdate(client *http.Client) error {
 			gzr, err := gzip.NewReader(file)
 			if err != nil {
 				fmt.Printf("Failed to read gzip: %v\n", err)
-				fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+				fmt.Println("Please visit https://github.com/Ardakilic/lilt to check the latest version manually and run the install.sh command to update.")
 				return nil
 			}
 			defer gzr.Close()
@@ -760,10 +760,10 @@ func selfUpdate(client *http.Client) error {
 				}
 				if err != nil {
 					fmt.Printf("Failed to extract tar: %v\n", err)
-					fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+					fmt.Println("Please visit https://github.com/Ardakilic/lilt to check the latest version manually and run the install.sh command to update.")
 					return nil
 				}
-				if header.Typeflag == tar.TypeReg && filepath.Base(header.Name) == "flac-converter-"+goos+"-"+goarch {
+				if header.Typeflag == tar.TypeReg && filepath.Base(header.Name) == "lilt-"+goos+"-"+goarch {
 					outFile, err := os.Create(filepath.Join(tempDir, header.Name))
 					if err != nil {
 						fmt.Printf("Warning: Failed to create output file %s: %v\n", header.Name, err)
@@ -781,14 +781,14 @@ func selfUpdate(client *http.Client) error {
 		}
 
 		// Find the extracted binary
-		binaryName := "flac-converter-" + goos + "-" + goarch
+		binaryName := "lilt-" + goos + "-" + goarch
 		if goos == "windows" {
 			binaryName += ".exe"
 		}
 		newBinaryPath := filepath.Join(tempDir, binaryName)
 		if _, err := os.Stat(newBinaryPath); os.IsNotExist(err) {
 			fmt.Printf("Failed to extract binary: %s not found\n", binaryName)
-			fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+			fmt.Println("Please visit https://github.com/Ardakilic/lilt to check the latest version manually and run the install.sh command to update.")
 			return nil
 		}
 
@@ -796,14 +796,14 @@ func selfUpdate(client *http.Client) error {
 		currentPath, err := os.Executable()
 		if err != nil {
 			fmt.Printf("Failed to get current executable path: %v\n", err)
-			fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+			fmt.Println("Please visit https://github.com/Ardakilic/lilt to check the latest version manually and run the install.sh command to update.")
 			return nil
 		}
 
 		backupPath := currentPath + ".old"
 		if err := os.Rename(currentPath, backupPath); err != nil {
 			fmt.Printf("Failed to backup current binary: %v\n", err)
-			fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+			fmt.Println("Please visit https://github.com/Ardakilic/lilt to check the latest version manually and run the install.sh command to update.")
 			return nil
 		}
 
@@ -811,7 +811,7 @@ func selfUpdate(client *http.Client) error {
 			// Restore backup
 			os.Rename(backupPath, currentPath)
 			fmt.Printf("Failed to replace binary: %v\n", err)
-			fmt.Println("Please visit https://github.com/Ardakilic/flac-to-16bit-converter to check the latest version manually and run the install.sh command to update.")
+			fmt.Println("Please visit https://github.com/Ardakilic/lilt to check the latest version manually and run the install.sh command to update.")
 			return nil
 		}
 

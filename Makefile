@@ -1,7 +1,7 @@
-# FLAC to 16-bit Converter - Makefile
+# Lilt - FLAC to 16-bit Converter - Makefile
 # Build cross-platform binaries
 
-BINARY_NAME=flac-converter
+BINARY_NAME=lilt
 VERSION=$(shell git describe --tags --always --dirty)
 LDFLAGS=-ldflags="-s -w -X main.version=$(VERSION)"
 

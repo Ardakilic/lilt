@@ -1,4 +1,4 @@
-# FLAC to 16-bit Converter
+# Lilt
 
 A cross-platform command-line tool that converts Hi-Res FLAC files to 16-bit FLAC files with a sample rate of 44.1kHz or 48kHz. Written in Go for excellent performance and cross-platform compatibility.
 
@@ -7,7 +7,7 @@ A cross-platform command-line tool that converts Hi-Res FLAC files to 16-bit FLA
 - 🎵 Converts 24-bit FLAC files to 16-bit FLAC using SoX
 - 📉 Downsamples high sample rate files:
   - 384kHz, 192kHz, or 96kHz → 48kHz
-  - 88.2kHz → 44.1kHz
+  - 352.8kHz, 176.4kHz, 88.2kHz → 44.1kHz
 - 🔄 Preserves existing 16-bit FLAC files without unnecessary conversion
 - 📝 Preserves ID3 tags and cover art from original FLAC files using FFmpeg (default: enabled; use --no-preserve-metadata to disable)
 - 🎶 Copies MP3 files without modification
@@ -22,31 +22,31 @@ A cross-platform command-line tool that converts Hi-Res FLAC files to 16-bit FLA
 For Linux and macOS, you can use the installation script:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/Ardakilic/flac-to-16bit-converter/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/Ardakilic/lilt/main/install.sh | bash
 ```
 
 Or download and run it manually:
 
 ```bash
-wget https://raw.githubusercontent.com/Ardakilic/flac-to-16bit-converter/main/install.sh
+wget https://raw.githubusercontent.com/Ardakilic/lilt/main/install.sh
 chmod +x install.sh
 ./install.sh
 ```
 
 ### Download Pre-built Binaries
 
-Download the latest release for your platform from the [Releases](https://github.com/Ardakilic/flac-to-16bit-converter/releases) page:
+Download the latest release for your platform from the [Releases](https://github.com/Ardakilic/lilt/releases) page:
 
-- **Windows**: `flac-converter-windows-amd64.exe` (x64) or `flac-converter-windows-arm64.exe` (ARM64)
-- **macOS**: `flac-converter-darwin-amd64` (Intel) or `flac-converter-darwin-arm64` (Apple Silicon)
-- **Linux**: `flac-converter-linux-amd64` (x64), `flac-converter-linux-arm64` (ARM64), `flac-converter-linux-386` (x86), or `flac-converter-linux-arm` (ARM)
+- **Windows**: `lilt-windows-amd64.exe` (x64) or `lilt-windows-arm64.exe` (ARM64)
+- **macOS**: `lilt-darwin-amd64` (Intel) or `lilt-darwin-arm64` (Apple Silicon)
+- **Linux**: `lilt-linux-amd64` (x64), `lilt-linux-arm64` (ARM64), `lilt-linux-386` (x86), or `lilt-linux-arm` (ARM)
 
 ### Build from Source
 
 ```bash
-git clone https://github.com/Ardakilic/flac-to-16bit-converter.git
-cd flac-to-16bit-converter
-go build -o flac-converter .
+git clone https://github.com/Ardakilic/lilt.git
+cd lilt
+go build -o lilt .
 ```
 
 ## Requirements
@@ -72,7 +72,7 @@ You can use this tool in one of two ways:
 ## Usage
 
 ```bash
-flac-converter <source_directory> [options]
+lilt <source_directory> [options]
 ```
 
 ### Options:
@@ -91,24 +91,24 @@ flac-converter <source_directory> [options]
 Using local SoX installation:
 ```bash
 # Windows
-flac-converter.exe "C:\Music\MyAlbum" --target-dir "C:\Music\MyAlbum-16bit" --copy-images
+lilt.exe "C:\Music\MyAlbum" --target-dir "C:\Music\MyAlbum-16bit" --copy-images
 
 # macOS/Linux
-./flac-converter ~/Music/MyAlbum --target-dir ~/Music/MyAlbum-16bit --copy-images
+./lilt ~/Music/MyAlbum --target-dir ~/Music/MyAlbum-16bit --copy-images
 ```
 
 Using Docker:
 ```bash
 # Windows
-flac-converter.exe "C:\Music\MyAlbum" --target-dir "C:\Music\MyAlbum-16bit" --use-docker
+lilt.exe "C:\Music\MyAlbum" --target-dir "C:\Music\MyAlbum-16bit" --use-docker
 
 # macOS/Linux
-./flac-converter ~/Music/MyAlbum --target-dir ~/Music/MyAlbum-16bit --use-docker
+./lilt ~/Music/MyAlbum --target-dir ~/Music/MyAlbum-16bit --use-docker
 ```
 
 Check for updates:
 ```bash
-flac-converter --self-update
+lilt --self-update
 ```
 
 ## Docker Support
@@ -123,7 +123,7 @@ When using the `--use-docker` option:
 
 You can specify a different Docker image with the `--docker-image` option:
 ```bash
-flac-converter ~/Music/MyAlbum --use-docker --docker-image your/sox-image:tag
+lilt ~/Music/MyAlbum --use-docker --docker-image your/sox-image:tag
 ```
 
 Alternative Docker images you can use:
@@ -165,11 +165,11 @@ For detailed development information, including advanced build options, testing 
 
 ```bash
 # Clone the repository
-git clone https://github.com/Ardakilic/flac-to-16bit-converter.git
-cd flac-to-16bit-converter
+git clone https://github.com/Ardakilic/lilt.git
+cd lilt
 
 # Build for current platform
-go build -o flac-converter .
+go build -o lilt .
 
 # Or use Make
 make build
@@ -191,7 +191,7 @@ To enable the self-update feature, set the version during build:
 
 ```bash
 # Set specific version
-go build -ldflags="-X main.version=v1.2.3" -o flac-converter .
+go build -ldflags="-X main.version=v1.2.3" -o lilt .
 
 # Use git tags (recommended)
 make build  # Automatically uses git describe for versioning
@@ -218,7 +218,7 @@ If you're migrating from the original bash script (`flac-converter.sh`), the usa
 ./flac-converter.sh ~/Music/Album --target-dir ~/Music/Album-16bit
 
 # New
-./flac-converter ~/Music/Album --target-dir ~/Music/Album-16bit
+./lilt ~/Music/Album --target-dir ~/Music/Album-16bit
 ```
 
 All command-line arguments remain the same for seamless migration.
