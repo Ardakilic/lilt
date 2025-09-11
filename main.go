@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -102,14 +103,7 @@ func runConverter(cmd *cobra.Command, args []string) error {
 	// Validate enforce-output-format flag
 	if config.EnforceOutputFormat != "" {
 		validFormats := []string{"flac", "mp3", "alac"}
-		isValid := false
-		for _, format := range validFormats {
-			if config.EnforceOutputFormat == format {
-				isValid = true
-				break
-			}
-		}
-		if !isValid {
+		if !slices.Contains(validFormats, config.EnforceOutputFormat) {
 			return fmt.Errorf("invalid enforce-output-format: %s. Valid options are: flac, mp3, alac", config.EnforceOutputFormat)
 		}
 	}
