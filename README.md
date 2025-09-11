@@ -1,6 +1,10 @@
 # Lilt
 
-A cross-platform command-line tool that converts Hi-Res FLAC files to 16-bit FLAC files with a sample rate of 44.1kHz or 48kHz. Written in Go for excellent performance and cross-platform compatibility.
+![Lilt Logo](assets/logo.svg)
+
+Lilt is a cross-platform command-line tool that converts Hi-Res FLAC files to 16-bit FLAC files with a sample rate of 44.1kHz or 48kHz. Written in Go for excellent performance and cross-platform compatibility.
+
+Lilt stands for "lightweight intelligent lossless transcoder". It is also a form of traditional singing common in the Goidelic speaking areas of Ireland, Scotland and the Isle of Man, though singing styles like it occur in many other countries.
 
 ## Features
 
