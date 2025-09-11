@@ -298,6 +298,41 @@ Added comprehensive support for Apple Lossless Audio Codec (ALAC) files:
 - Added comprehensive unit tests for ALAC functionality
 
 **Dependencies:**
+- FFmpeg is now required for ALAC support and metadata preservation
+- FFmpeg dependency is automatically detected when ALAC files are present
+- Maintains backward compatibility - projects with only FLAC files still work with SoX alone
+
+### Format Enforcement Feature
+
+Added `--enforce-output-format` flag for converting all audio files to a specific output format:
+
+**Features:**
+- Supports three output formats: `flac`, `mp3`, and `alac`
+- Intelligent conversion logic that avoids unnecessary re-encoding when possible
+- Preserves audio quality appropriately for each target format
+- Maintains folder structure and file organization
+
+**Technical Implementation:**
+- New `processAudioFileWithEnforcedFormat()` function handles format enforcement logic
+- Separate processing functions for each target format:
+  - `processToFLAC()`: Converts all files to 16-bit FLAC
+  - `processToMP3()`: Converts to 320kbps MP3 with intelligent sample rate handling
+  - `processToALAC()`: Converts to 16-bit ALAC format
+- Added helper functions for format conversion:
+  - `convertMP3ToFLAC()`: MP3 to FLAC conversion using SoX
+  - `convertToMP3()`: Multi-format to MP3 conversion with 320kbps quality
+  - `convertToALAC()`: Multi-format to ALAC conversion using FFmpeg
+- File extension management with new helper functions:
+  - `changeExtensionToMP3()`: Updates file paths for MP3 output
+  - `changeExtensionToM4A()`: Updates file paths for ALAC output
+
+**Conversion Logic:**
+- **FLAC mode**: Optimizes existing 16-bit FLAC files, converts all others to 16-bit FLAC
+- **MP3 mode**: Preserves existing MP3 files, converts FLAC/ALAC to 320kbps MP3
+- **ALAC mode**: Optimizes existing 16-bit ALAC files, converts all others to 16-bit ALAC
+- Sample rate handling preserves audio characteristics (48kHz family stays 48kHz, 44.1kHz family stays 44.1kHz)
+
+## Testing
 - FFmpeg is now required for both local and Docker execution due to ALAC support
 - Updated error messages to reflect FFmpeg requirement
 - Docker image already includes FFmpeg support
