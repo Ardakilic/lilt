@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -22,13 +23,14 @@ import (
 
 // Config holds the application configuration
 type Config struct {
-	SourceDir          string
-	TargetDir          string
-	CopyImages         bool
-	UseDocker          bool
-	DockerImage        string
-	SoxCommand         string
-	NoPreserveMetadata bool
+	SourceDir           string
+	TargetDir           string
+	CopyImages          bool
+	UseDocker           bool
+	DockerImage         string
+	SoxCommand          string
+	NoPreserveMetadata  bool
+	EnforceOutputFormat string // "flac", "mp3", "alac", or empty for default behavior
 }
 
 // AudioInfo holds information about an audio file
@@ -47,10 +49,15 @@ var (
 var rootCmd = &cobra.Command{
 	Use:   "lilt <source_directory>",
 	Short: "Convert Hi-Res FLAC/ALAC files to 16-bit FLAC files",
-	Long: `Lilt - FLAC/ALAC to 16-bit FLAC Converter
+	Long: `Lilt - FLAC/ALAC Audio Converter
 
 This tool converts Hi-Res FLAC and ALAC files to 16-bit FLAC files with a sample rate of 44.1kHz or 48kHz.
 It also copies MP3 files and image files (JPG, PNG) to the target directory.
+
+With the --enforce-output-format flag, you can convert all audio files to a specific format:
+- flac: Convert all files to 16-bit FLAC
+- mp3: Convert all files to 320kbps MP3
+- alac: Convert all files to 16-bit ALAC (M4A)
 
 Copyright (C) 2025 Arda Kilicdagi
 Licensed under MIT License`,
@@ -65,6 +72,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&config.UseDocker, "use-docker", false, "Use Docker to run Sox instead of local installation")
 	rootCmd.Flags().StringVar(&config.DockerImage, "docker-image", "ardakilic/sox_ng:latest", "Specify Docker image")
 	rootCmd.Flags().BoolVar(&config.NoPreserveMetadata, "no-preserve-metadata", false, "Do not preserve ID3 tags and cover art using FFmpeg (metadata is preserved by default)")
+	rootCmd.Flags().StringVar(&config.EnforceOutputFormat, "enforce-output-format", "", "Enforce output format for all files: flac, mp3, or alac")
 	rootCmd.Flags().BoolVar(&selfUpdateFlag, "self-update", false, "Check for updates and self-update if newer version available")
 
 	// Set default values
@@ -91,6 +99,14 @@ func runConverter(cmd *cobra.Command, args []string) error {
 	}
 
 	config.SourceDir = args[0]
+
+	// Validate enforce-output-format flag
+	if config.EnforceOutputFormat != "" {
+		validFormats := []string{"flac", "mp3", "alac"}
+		if !slices.Contains(validFormats, config.EnforceOutputFormat) {
+			return fmt.Errorf("invalid enforce-output-format: %s. Valid options are: flac, mp3, alac", config.EnforceOutputFormat)
+		}
+	}
 
 	// Validate source directory
 	if _, err := os.Stat(config.SourceDir); os.IsNotExist(err) {
@@ -213,6 +229,12 @@ func processAudioFiles() error {
 			return fmt.Errorf("failed to create target directory: %w", err)
 		}
 
+		// Handle enforce-output-format mode
+		if config.EnforceOutputFormat != "" {
+			return processAudioFileWithEnforcedFormat(path, targetPath, ext)
+		}
+
+		// Original processing logic when no format enforcement
 		// Handle MP3 files - just copy them
 		if ext == ".mp3" {
 			fmt.Printf("Copying MP3 file: %s\n", path)
@@ -265,6 +287,124 @@ func processAudioFiles() error {
 
 		return nil
 	})
+}
+
+func processAudioFileWithEnforcedFormat(sourcePath, targetPath, sourceExt string) error {
+	// Get audio info for source file
+	var audioInfo *AudioInfo
+	var err error
+
+	// Skip MP3 files if they don't need processing
+	if sourceExt == ".mp3" && config.EnforceOutputFormat == "mp3" {
+		fmt.Printf("Copying MP3 file: %s (already in target format)\n", sourcePath)
+		return copyFile(sourcePath, targetPath)
+	}
+
+	// Get audio info for FLAC and ALAC files
+	if sourceExt == ".flac" || sourceExt == ".m4a" {
+		audioInfo, err = getAudioInfo(sourcePath)
+		if err != nil {
+			fmt.Printf("Warning: Could not get audio info for %s, copying original\n", sourcePath)
+			return copyFile(sourcePath, targetPath)
+		}
+		fmt.Printf("Detected: %d bits, %d Hz, %s format\n", audioInfo.Bits, audioInfo.Rate, audioInfo.Format)
+	}
+
+	// Determine target file extension and process accordingly
+	switch config.EnforceOutputFormat {
+	case "flac":
+		return processToFLAC(sourcePath, targetPath, sourceExt, audioInfo)
+	case "mp3":
+		return processToMP3(sourcePath, targetPath, sourceExt, audioInfo)
+	case "alac":
+		return processToALAC(sourcePath, targetPath, sourceExt, audioInfo)
+	default:
+		return fmt.Errorf("unsupported enforce-output-format: %s", config.EnforceOutputFormat)
+	}
+}
+
+func processToFLAC(sourcePath, targetPath, sourceExt string, audioInfo *AudioInfo) error {
+	// Change target extension to .flac
+	targetPath = changeExtensionToFlac(targetPath)
+
+	if sourceExt == ".mp3" {
+		// Never convert MP3 to FLAC - just copy the original MP3
+		fmt.Printf("Copying MP3: %s (MP3 files are not converted to lossless formats)\n", sourcePath)
+		// Keep original extension for MP3
+		originalTargetPath := strings.TrimSuffix(targetPath, ".flac") + ".mp3"
+		return copyFile(sourcePath, originalTargetPath)
+	}
+
+	if sourceExt == ".flac" && audioInfo != nil {
+		// Check if FLAC needs conversion or can be copied
+		needsConversion, bitrateArgs, sampleRateArgs := determineConversion(audioInfo)
+		if !needsConversion {
+			fmt.Printf("Copying FLAC: %s (already 16-bit)\n", sourcePath)
+			return copyFile(sourcePath, targetPath)
+		} else {
+			fmt.Printf("Converting FLAC: %s (reducing quality to 16-bit)\n", sourcePath)
+			return processAudioFile(sourcePath, targetPath, audioInfo, needsConversion, bitrateArgs, sampleRateArgs)
+		}
+	}
+
+	if sourceExt == ".m4a" && audioInfo != nil {
+		// Convert ALAC to FLAC
+		needsConversion, bitrateArgs, sampleRateArgs := determineConversion(audioInfo)
+		if needsConversion {
+			fmt.Printf("Converting ALAC to FLAC: %s (reducing quality to 16-bit)\n", sourcePath)
+		} else {
+			fmt.Printf("Converting ALAC to FLAC: %s (maintaining quality)\n", sourcePath)
+		}
+		return processAudioFile(sourcePath, targetPath, audioInfo, needsConversion, bitrateArgs, sampleRateArgs)
+	}
+
+	return fmt.Errorf("unsupported source format for FLAC conversion: %s", sourceExt)
+}
+
+func processToMP3(sourcePath, targetPath, sourceExt string, audioInfo *AudioInfo) error {
+	// Change target extension to .mp3
+	targetPath = changeExtensionToMP3(targetPath)
+
+	if sourceExt == ".mp3" {
+		fmt.Printf("Copying MP3: %s (already in target format)\n", sourcePath)
+		return copyFile(sourcePath, targetPath)
+	}
+
+	// Convert FLAC or ALAC to MP3 at 320kbps
+	fmt.Printf("Converting %s to MP3: %s (320kbps)\n", strings.ToUpper(strings.TrimPrefix(sourceExt, ".")), sourcePath)
+	return convertToMP3(sourcePath, targetPath, audioInfo)
+}
+
+func processToALAC(sourcePath, targetPath, sourceExt string, audioInfo *AudioInfo) error {
+	// Change target extension to .m4a
+	targetPath = changeExtensionToM4A(targetPath)
+
+	if sourceExt == ".m4a" && audioInfo != nil {
+		// Check if ALAC needs conversion or can be copied
+		if audioInfo.Bits == 16 && (audioInfo.Rate == 44100 || audioInfo.Rate == 48000) {
+			fmt.Printf("Copying ALAC: %s (already 16-bit)\n", sourcePath)
+			return copyFile(sourcePath, targetPath)
+		} else {
+			fmt.Printf("Converting ALAC: %s (reducing quality to 16-bit)\n", sourcePath)
+			return convertToALAC(sourcePath, targetPath, audioInfo)
+		}
+	}
+
+	if sourceExt == ".flac" {
+		// Convert FLAC to ALAC
+		fmt.Printf("Converting FLAC to ALAC: %s\n", sourcePath)
+		return convertToALAC(sourcePath, targetPath, audioInfo)
+	}
+
+	if sourceExt == ".mp3" {
+		// Never convert MP3 to ALAC - just copy the original MP3
+		fmt.Printf("Copying MP3: %s (MP3 files are not converted to lossless formats)\n", sourcePath)
+		// Keep original extension for MP3
+		originalTargetPath := strings.TrimSuffix(targetPath, ".m4a") + ".mp3"
+		return copyFile(sourcePath, originalTargetPath)
+	}
+
+	return fmt.Errorf("unsupported source format for ALAC conversion: %s", sourceExt)
 }
 
 func getAudioInfo(filePath string) (*AudioInfo, error) {
@@ -364,6 +504,212 @@ func parseALACInfo(info string) (*AudioInfo, error) {
 func changeExtensionToFlac(filePath string) string {
 	ext := filepath.Ext(filePath)
 	return strings.TrimSuffix(filePath, ext) + ".flac"
+}
+
+func changeExtensionToMP3(filePath string) string {
+	ext := filepath.Ext(filePath)
+	return strings.TrimSuffix(filePath, ext) + ".mp3"
+}
+
+func changeExtensionToM4A(filePath string) string {
+	ext := filepath.Ext(filePath)
+	return strings.TrimSuffix(filePath, ext) + ".m4a"
+}
+
+func convertToMP3(sourcePath, targetPath string, audioInfo *AudioInfo) error {
+	// MP3 conversion: Use SoX to convert audio, then FFmpeg to preserve metadata
+	var tempPath string
+
+	if !config.NoPreserveMetadata {
+		// Create temporary path for conversion output with proper extension
+		ext := filepath.Ext(targetPath)
+		tempPath = strings.TrimSuffix(targetPath, ext) + ".tmp" + ext
+	} else {
+		tempPath = targetPath
+	}
+
+	// Determine appropriate sample rate for MP3
+	targetSampleRate := "44100"
+	if audioInfo != nil {
+		switch audioInfo.Rate {
+		case 48000, 96000, 192000, 384000:
+			targetSampleRate = "48000"
+		default:
+			targetSampleRate = "44100"
+		}
+	}
+
+	var cmd *exec.Cmd
+
+	if config.UseDocker {
+		dockerSourcePath := getDockerPath(sourcePath)
+		dockerTempPath := getDockerTargetPath(tempPath)
+		args := []string{"run", "--rm",
+			"-v", fmt.Sprintf("%s:/source", config.SourceDir),
+			"-v", fmt.Sprintf("%s:/target", config.TargetDir),
+			config.DockerImage, dockerSourcePath, "-t", "mp3", "-C", "320", "-r", targetSampleRate, dockerTempPath}
+		cmd = exec.Command("docker", args...)
+	} else {
+		cmd = exec.Command(config.SoxCommand, sourcePath, "-t", "mp3", "-C", "320", "-r", targetSampleRate, tempPath)
+	}
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("conversion to MP3 failed: %w", err)
+	}
+
+	if !config.NoPreserveMetadata {
+		// Merge metadata using FFmpeg
+		if mergeErr := mergeMetadataWithFFmpeg(sourcePath, tempPath, targetPath); mergeErr != nil {
+			fmt.Printf("Warning: Metadata preservation failed for %s, keeping converted audio without tags: %v\n", targetPath, mergeErr)
+			// Fallback: rename temp to target
+			if renameErr := os.Rename(tempPath, targetPath); renameErr != nil {
+				return fmt.Errorf("fallback rename failed after metadata merge error: %w", renameErr)
+			}
+			return nil
+		}
+		// If merge succeeded, temp is already removed in merge function
+	} else {
+		// If not preserving metadata, tempPath == targetPath, no action needed
+	}
+
+	return nil
+}
+
+func convertToALAC(sourcePath, targetPath string, audioInfo *AudioInfo) error {
+	// ALAC conversion:
+	// To preserve the best quality and metadata:
+	// First Use SoX to process and downsample audio to a temp FLAC, since sox can do this better
+	// Then since SoX can't encode to ALAC, use FFmpeg to convert to ALAC and preserve metadata
+
+	var tempPath string
+
+	if !config.NoPreserveMetadata {
+		// Create temporary path for conversion output with proper extension
+		ext := filepath.Ext(targetPath)
+		tempPath = strings.TrimSuffix(targetPath, ext) + ".tmp" + ext
+	} else {
+		tempPath = targetPath
+	}
+
+	// Step 1: Use SoX to convert source to intermediate FLAC with proper bit depth/sample rate
+	tempFlacPath := strings.TrimSuffix(tempPath, ".m4a") + ".temp.flac"
+
+	// Determine if we need SoX processing for bit depth/sample rate conversion
+	needsConversion := false
+	var bitrateArgs []string
+	sampleRateArgs := []string{"rate", "-v", "-L"}
+
+	if audioInfo != nil {
+		// Check bit depth
+		if audioInfo.Bits > 16 {
+			needsConversion = true
+			bitrateArgs = []string{"-b", "16"}
+		}
+
+		// Check sample rate
+		switch audioInfo.Rate {
+		case 96000, 192000, 384000:
+			needsConversion = true
+			sampleRateArgs = append(sampleRateArgs, "48000")
+		case 88200, 176400, 352800:
+			needsConversion = true
+			sampleRateArgs = append(sampleRateArgs, "44100")
+		}
+	}
+
+	var cmd *exec.Cmd
+
+	if needsConversion {
+		// Use SoX for quality conversion to FLAC first
+		if config.UseDocker {
+			dockerSource := getDockerPath(sourcePath)
+			dockerTempFlac := getDockerTargetPath(tempFlacPath)
+
+			args := []string{"run", "--rm",
+				"-v", fmt.Sprintf("%s:/source", config.SourceDir),
+				"-v", fmt.Sprintf("%s:/target", config.TargetDir),
+				config.DockerImage, "--multi-threaded", "-G", dockerSource}
+
+			args = append(args, bitrateArgs...)
+			args = append(args, dockerTempFlac)
+			args = append(args, sampleRateArgs...)
+			args = append(args, "dither")
+
+			cmd = exec.Command("docker", args...)
+		} else {
+			args := []string{"--multi-threaded", "-G", sourcePath}
+			args = append(args, bitrateArgs...)
+			args = append(args, tempFlacPath)
+			args = append(args, sampleRateArgs...)
+			args = append(args, "dither")
+
+			cmd = exec.Command(config.SoxCommand, args...)
+		}
+
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("SoX conversion to FLAC failed: %w", err)
+		}
+	} else {
+		// Direct conversion to FLAC without quality changes
+		if config.UseDocker {
+			dockerSource := getDockerPath(sourcePath)
+			dockerTempFlac := getDockerTargetPath(tempFlacPath)
+
+			args := []string{"run", "--rm",
+				"-v", fmt.Sprintf("%s:/source", config.SourceDir),
+				"-v", fmt.Sprintf("%s:/target", config.TargetDir),
+				config.DockerImage, dockerSource, dockerTempFlac}
+
+			cmd = exec.Command("docker", args...)
+		} else {
+			cmd = exec.Command(config.SoxCommand, sourcePath, tempFlacPath)
+		}
+
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("SoX conversion to FLAC failed: %w", err)
+		}
+	}
+
+	// Step 2: Convert FLAC to ALAC using FFmpeg
+	if config.UseDocker {
+		dockerTempFlac := getDockerTargetPath(tempFlacPath)
+		dockerTemp := getDockerTargetPath(tempPath)
+
+		args := []string{"run", "--rm", "--entrypoint", "ffmpeg",
+			"-v", fmt.Sprintf("%s:/source", config.SourceDir),
+			"-v", fmt.Sprintf("%s:/target", config.TargetDir),
+			config.DockerImage,
+			"-y", "-i", dockerTempFlac, "-c:a", "alac", "-sample_fmt", "s16p", dockerTemp}
+
+		cmd = exec.Command("docker", args...)
+	} else {
+		cmd = exec.Command("ffmpeg", "-y", "-i", tempFlacPath, "-c:a", "alac", "-sample_fmt", "s16p", tempPath)
+	}
+
+	if err := cmd.Run(); err != nil {
+		os.Remove(tempFlacPath) // Clean up temp FLAC file
+		return fmt.Errorf("FFmpeg FLAC to ALAC conversion failed: %w", err)
+	}
+
+	// Clean up temp FLAC file
+	os.Remove(tempFlacPath)
+
+	if !config.NoPreserveMetadata {
+		// Merge metadata using FFmpeg
+		if mergeErr := mergeMetadataWithFFmpeg(sourcePath, tempPath, targetPath); mergeErr != nil {
+			fmt.Printf("Warning: Metadata preservation failed for %s, keeping converted audio without tags: %v\n", targetPath, mergeErr)
+			// Fallback: rename temp to target
+			if renameErr := os.Rename(tempPath, targetPath); renameErr != nil {
+				return fmt.Errorf("fallback rename failed after metadata merge error: %w", renameErr)
+			}
+			return nil
+		}
+		// If merge succeeded, temp is already removed in merge function
+	} else {
+		// If not preserving metadata, tempPath == targetPath, no action needed
+	}
+
+	return nil
 }
 
 func processAudioFile(sourcePath, targetPath string, audioInfo *AudioInfo, needsConversion bool, bitrateArgs, sampleRateArgs []string) error {

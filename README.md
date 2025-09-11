@@ -12,12 +12,16 @@ Lilt stands for "lightweight intelligent lossless transcoder". It is also a form
 - 🍎 **ALAC Support**: Converts ALAC (.m4a) files to FLAC format
   - 16-bit 44.1kHz/48kHz ALAC files are converted to FLAC with the same quality
   - Hi-Res ALAC files are converted to 16-bit FLAC following the same rules as FLAC files
-- 📉 Downsamples high sample rate files:
+- � **Format Enforcement**: Convert all audio files to a specific output format:
+  - **FLAC**: Convert all FLAC, ALAC, and MP3 files to 16-bit FLAC
+  - **MP3**: Convert all FLAC and ALAC files to 320kbps MP3 (preserves existing MP3 files)
+  - **ALAC**: Convert all FLAC and MP3 files to 16-bit ALAC (optimizes existing ALAC files)
+- �📉 Downsamples high sample rate files:
   - 384kHz, 192kHz, or 96kHz → 48kHz
   - 352.8kHz, 176.4kHz, 88.2kHz → 44.1kHz
 - 🔄 Preserves existing 16-bit FLAC files without unnecessary conversion
 - 📝 Preserves ID3 tags and cover art from original files using FFmpeg (default: enabled; use --no-preserve-metadata to disable)
-- 🎶 Copies MP3 files without modification
+- 🎶 Copies MP3 files without modification (unless format enforcement is enabled)
 - 🖼️ Optional: Copies JPG and PNG images from the source directory
 - 🐳 Docker support for containerized execution
 - 💻 Cross-platform: Windows, macOS, Linux (x64, ARM64, x86, ARM)
@@ -85,12 +89,13 @@ lilt <source_directory> [options]
 ### Options:
 
 ```
---target-dir <dir>   Specify target directory (default: ./transcoded)
---copy-images        Copy JPG and PNG files
---no-preserve-metadata  Do not preserve ID3 tags and cover art using FFmpeg (default: false)
---use-docker         Use Docker to run Sox instead of local installation
---docker-image <img> Specify Docker image (default: ardakilic/sox_ng:latest)
---self-update        Check for updates and self-update if newer version available
+--target-dir <dir>              Specify target directory (default: ./transcoded)
+--copy-images                   Copy JPG and PNG files
+--no-preserve-metadata          Do not preserve ID3 tags and cover art using FFmpeg (default: false)
+--enforce-output-format <fmt>   Enforce output format for all files: flac, mp3, or alac
+--use-docker                    Use Docker to run Sox instead of local installation
+--docker-image <img>            Specify Docker image (default: ardakilic/sox_ng:latest)
+--self-update                   Check for updates and self-update if newer version available
 ```
 
 ### Examples:
@@ -111,6 +116,24 @@ lilt.exe "C:\Music\MyAlbum" --target-dir "C:\Music\MyAlbum-16bit" --use-docker
 
 # macOS/Linux
 ./lilt ~/Music/MyAlbum --target-dir ~/Music/MyAlbum-16bit --use-docker
+```
+
+Convert all files to MP3:
+```bash
+# Windows
+lilt.exe "C:\Music\MyAlbum" --enforce-output-format mp3 --target-dir "C:\Music\MyAlbum-MP3"
+
+# macOS/Linux
+./lilt ~/Music/MyAlbum --enforce-output-format mp3 --target-dir ~/Music/MyAlbum-MP3
+```
+
+Convert all files to ALAC:
+```bash
+# Windows
+lilt.exe "C:\Music\MyAlbum" --enforce-output-format alac --target-dir "C:\Music\MyAlbum-ALAC"
+
+# macOS/Linux
+./lilt ~/Music/MyAlbum --enforce-output-format alac --target-dir ~/Music/MyAlbum-ALAC
 ```
 
 Check for updates:
@@ -139,6 +162,8 @@ Alternative Docker images you can use:
 
 ## How It Works
 
+### Default Behavior (without --enforce-output-format)
+
 1. The tool scans the source directory recursively for `.flac`, `.m4a` (ALAC), and `.mp3` files
 2. **For FLAC files:**
    - If a FLAC file is **24-bit**, it is converted to **16-bit** using SoX
@@ -153,6 +178,26 @@ Alternative Docker images you can use:
 5. MP3 files are copied without modification
 6. If `--copy-images` is enabled, `.jpg` and `.png` files are copied to the target directory
 7. The original folder structure is preserved in the target directory
+
+### Format Enforcement Mode (with --enforce-output-format)
+
+When using `--enforce-output-format`, all audio files are converted to the specified format:
+
+#### FLAC Mode (`--enforce-output-format flac`)
+- **FLAC files**: Converted to 16-bit FLAC if needed, or copied if already 16-bit
+- **ALAC files**: Converted to 16-bit FLAC
+- **MP3 files**: Copied as-is (MP3 files are not converted to lossless formats)
+
+#### MP3 Mode (`--enforce-output-format mp3`)
+- **FLAC files**: Converted to 320kbps MP3
+- **ALAC files**: Converted to 320kbps MP3
+- **MP3 files**: Copied without modification
+- Sample rate is intelligently preserved (48kHz family → 48kHz, 44.1kHz family → 44.1kHz)
+
+#### ALAC Mode (`--enforce-output-format alac`)
+- **FLAC files**: Converted to 16-bit ALAC (.m4a)
+- **MP3 files**: Copied as-is (MP3 files are not converted to lossless formats)
+- **ALAC files**: Converted to 16-bit ALAC if needed, or copied if already 16-bit
 
 ## Technical Details
 

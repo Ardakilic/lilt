@@ -4197,6 +4197,63 @@ func TestProcessALAC(t *testing.T) {
 		}
 		// Don't assert on error since docker availability varies
 	})
+
+	t.Run("ConversionWithBitDepthAndEffects", func(t *testing.T) {
+		config.UseDocker = false
+		config.NoPreserveMetadata = true
+		config.SourceDir = tmpDir
+		config.TargetDir = tmpDir
+
+		// Test with various bit depths and effects
+		bitDepths := []string{"16", "24"}
+		for _, depth := range bitDepths {
+			err := processALAC(sourcePath, targetPath, true, []string{"-b", depth}, []string{"rate", "-v", "-L", "44100"})
+			if err == nil {
+				t.Errorf("Expected error for bit depth %s, got none", depth)
+			}
+		}
+	})
+
+	t.Run("DockerModeWithEffects", func(t *testing.T) {
+		config.UseDocker = true
+		config.NoPreserveMetadata = true
+		config.SourceDir = tmpDir
+		config.TargetDir = tmpDir
+		config.DockerImage = "test/image"
+
+		err := processALAC(sourcePath, targetPath, true, []string{"-b", "16"}, []string{"rate", "-v", "-L", "44100"})
+		// This will test Docker command construction even if it fails
+		if err != nil {
+			t.Logf("Expected Docker failure: %v", err)
+		}
+	})
+
+	t.Run("NoConversionMetadataPreservationPath", func(t *testing.T) {
+		config.UseDocker = false
+		config.NoPreserveMetadata = false
+		config.SourceDir = tmpDir
+		config.TargetDir = tmpDir
+
+		// Test the metadata-only preservation path
+		err := processALAC(sourcePath, targetPath, false, []string{}, []string{})
+		if err != nil {
+			// Should fail due to missing ffmpeg, but tests the code path
+			t.Logf("Expected metadata preservation failure: %v", err)
+		}
+	})
+
+	t.Run("SourceFileNotExist", func(t *testing.T) {
+		config.UseDocker = false
+		config.NoPreserveMetadata = true
+		config.SourceDir = tmpDir
+		config.TargetDir = tmpDir
+
+		nonExistentSource := filepath.Join(tmpDir, "nonexistent.m4a")
+		err := processALAC(nonExistentSource, targetPath, false, []string{}, []string{})
+		if err == nil {
+			t.Error("Expected error for non-existent source file")
+		}
+	})
 }
 
 func TestGetALACInfoError(t *testing.T) {
@@ -5306,6 +5363,674 @@ func TestFinalCoveragePushOver75(t *testing.T) {
 		err = processFlac(sourceFile, targetFile, false, []string{}, []string{})
 		if err != nil {
 			t.Logf("processFlac metadata path error: %v", err)
+		}
+	})
+}
+
+// Tests for enforce-output-format functionality
+func TestEnforceOutputFormatValidation(t *testing.T) {
+	originalConfig := config
+	defer func() { config = originalConfig }()
+
+	tests := []struct {
+		format    string
+		shouldErr bool
+		name      string
+	}{
+		{"flac", false, "valid flac format"},
+		{"mp3", false, "valid mp3 format"},
+		{"alac", false, "valid alac format"},
+		{"wav", true, "invalid wav format"},
+		{"invalid", true, "invalid format"},
+		{"", false, "empty format (disabled)"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config.EnforceOutputFormat = tt.format
+
+			// Create a temporary directory for testing
+			tmpDir, err := os.MkdirTemp("", "lilt-test-validation")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer os.RemoveAll(tmpDir)
+
+			err = runConverter(nil, []string{tmpDir})
+
+			if tt.shouldErr && err == nil {
+				t.Errorf("Expected error for format %s, but got none", tt.format)
+			}
+			if !tt.shouldErr && err != nil && !strings.Contains(err.Error(), "not installed") {
+				t.Errorf("Expected no validation error for format %s, but got: %v", tt.format, err)
+			}
+		})
+	}
+}
+
+func TestChangeExtensionHelpers(t *testing.T) {
+	testCases := []struct {
+		input    string
+		expected string
+		function string
+	}{
+		{"/path/file.flac", "/path/file.mp3", "toMP3"},
+		{"/path/file.m4a", "/path/file.mp3", "toMP3"},
+		{"/path/file.flac", "/path/file.m4a", "toM4A"},
+		{"/path/file.mp3", "/path/file.m4a", "toM4A"},
+		{"/path/file.wav", "/path/file.flac", "toFLAC"},
+		{"/path/file.mp3", "/path/file.flac", "toFLAC"},
+	}
+
+	for _, tc := range testCases {
+		var result string
+		switch tc.function {
+		case "toMP3":
+			result = changeExtensionToMP3(tc.input)
+		case "toM4A":
+			result = changeExtensionToM4A(tc.input)
+		case "toFLAC":
+			result = changeExtensionToFlac(tc.input)
+		}
+
+		if result != tc.expected {
+			t.Errorf("%s(%s) = %s, want %s", tc.function, tc.input, result, tc.expected)
+		}
+	}
+}
+
+func TestProcessAudioFileWithEnforcedFormat(t *testing.T) {
+	originalConfig := config
+	defer func() { config = originalConfig }()
+
+	tmpDir, err := os.MkdirTemp("", "lilt-test-enforce")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create test files
+	flacFile := filepath.Join(tmpDir, "test.flac")
+	mp3File := filepath.Join(tmpDir, "test.mp3")
+	alacFile := filepath.Join(tmpDir, "test.m4a")
+
+	if err := os.WriteFile(flacFile, []byte("fake flac data"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mp3File, []byte("fake mp3 data"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(alacFile, []byte("fake alac data"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	config = Config{
+		SourceDir:           tmpDir,
+		TargetDir:           tmpDir,
+		UseDocker:           false,
+		NoPreserveMetadata:  true,
+		SoxCommand:          "echo", // Mock command to avoid failures
+		EnforceOutputFormat: "mp3",
+	}
+
+	t.Run("EnforceMP3FromMP3", func(t *testing.T) {
+		targetPath := filepath.Join(tmpDir, "target.mp3")
+		err := processAudioFileWithEnforcedFormat(mp3File, targetPath, ".mp3")
+		if err != nil {
+			t.Errorf("processAudioFileWithEnforcedFormat failed: %v", err)
+		}
+	})
+
+	t.Run("EnforceMP3FromFLAC", func(t *testing.T) {
+		targetPath := filepath.Join(tmpDir, "target.mp3")
+		err := processAudioFileWithEnforcedFormat(flacFile, targetPath, ".flac")
+		// This will fail because we don't have real sox, but we test the path
+		if err == nil {
+			t.Log("processAudioFileWithEnforcedFormat unexpectedly succeeded")
+		} else {
+			t.Logf("Expected processAudioFileWithEnforcedFormat error: %v", err)
+		}
+	})
+
+	t.Run("EnforceMP3FromALAC", func(t *testing.T) {
+		targetPath := filepath.Join(tmpDir, "target.mp3")
+		err := processAudioFileWithEnforcedFormat(alacFile, targetPath, ".m4a")
+		// This will fail because we don't have real ffmpeg, but we test the path
+		if err == nil {
+			t.Log("processAudioFileWithEnforcedFormat unexpectedly succeeded")
+		} else {
+			t.Logf("Expected processAudioFileWithEnforcedFormat error: %v", err)
+		}
+	})
+
+	config.EnforceOutputFormat = "flac"
+	t.Run("EnforceFlacFromMP3", func(t *testing.T) {
+		targetPath := filepath.Join(tmpDir, "target.flac")
+		err := processAudioFileWithEnforcedFormat(mp3File, targetPath, ".mp3")
+		// This will fail because we don't have real sox, but we test the path
+		if err == nil {
+			t.Log("processAudioFileWithEnforcedFormat unexpectedly succeeded")
+		} else {
+			t.Logf("Expected processAudioFileWithEnforcedFormat error: %v", err)
+		}
+	})
+
+	t.Run("EnforceFlacFromFLAC", func(t *testing.T) {
+		targetPath := filepath.Join(tmpDir, "target.flac")
+		err := processAudioFileWithEnforcedFormat(flacFile, targetPath, ".flac")
+		if err != nil {
+			t.Errorf("processAudioFileWithEnforcedFormat FLAC to FLAC failed: %v", err)
+		}
+	})
+
+	t.Run("EnforceFlacFromALAC", func(t *testing.T) {
+		targetPath := filepath.Join(tmpDir, "target.flac")
+		err := processAudioFileWithEnforcedFormat(alacFile, targetPath, ".m4a")
+		// This will fail because we don't have real ffmpeg, but we test the path
+		if err == nil {
+			t.Log("processAudioFileWithEnforcedFormat unexpectedly succeeded")
+		} else {
+			t.Logf("Expected processAudioFileWithEnforcedFormat error: %v", err)
+		}
+	})
+
+	config.EnforceOutputFormat = "alac"
+	t.Run("EnforceALACFromMP3", func(t *testing.T) {
+		targetPath := filepath.Join(tmpDir, "target.m4a")
+		err := processAudioFileWithEnforcedFormat(mp3File, targetPath, ".mp3")
+		// This will fail because we don't have real ffmpeg, but we test the path
+		if err == nil {
+			t.Log("processAudioFileWithEnforcedFormat unexpectedly succeeded")
+		} else {
+			t.Logf("Expected processAudioFileWithEnforcedFormat error: %v", err)
+		}
+	})
+
+	t.Run("EnforceALACFromFLAC", func(t *testing.T) {
+		targetPath := filepath.Join(tmpDir, "target.m4a")
+		err := processAudioFileWithEnforcedFormat(flacFile, targetPath, ".flac")
+		// This will fail because we don't have real ffmpeg, but we test the path
+		if err == nil {
+			t.Log("processAudioFileWithEnforcedFormat unexpectedly succeeded")
+		} else {
+			t.Logf("Expected processAudioFileWithEnforcedFormat error: %v", err)
+		}
+	})
+
+	t.Run("EnforceALACFromALAC", func(t *testing.T) {
+		targetPath := filepath.Join(tmpDir, "target.m4a")
+		err := processAudioFileWithEnforcedFormat(alacFile, targetPath, ".m4a")
+		if err != nil {
+			t.Errorf("processAudioFileWithEnforcedFormat ALAC to ALAC failed: %v", err)
+		}
+	})
+
+	t.Run("UnsupportedSourceFormat", func(t *testing.T) {
+		wavFile := filepath.Join(tmpDir, "test.wav")
+		if err := os.WriteFile(wavFile, []byte("fake wav data"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		targetPath := filepath.Join(tmpDir, "target.mp3")
+		err := processAudioFileWithEnforcedFormat(wavFile, targetPath, ".wav")
+		if err == nil {
+			t.Error("Expected error for unsupported source format")
+		}
+	})
+
+	t.Run("WithDockerMode", func(t *testing.T) {
+		config.UseDocker = true
+		config.DockerImage = "test-image"
+		defer func() { config.UseDocker = false }()
+
+		targetPath := filepath.Join(tmpDir, "target.m4a")
+		err := processAudioFileWithEnforcedFormat(flacFile, targetPath, ".flac")
+		// This will test Docker command construction even if it fails
+		if err != nil {
+			t.Logf("Expected Docker failure: %v", err)
+		}
+	})
+}
+
+func TestProcessToFLAC(t *testing.T) {
+	originalConfig := config
+	defer func() { config = originalConfig }()
+
+	tmpDir, err := os.MkdirTemp("", "lilt-test-processflac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	sourceFile := filepath.Join(tmpDir, "test.mp3")
+	targetFile := filepath.Join(tmpDir, "test.flac")
+	alacSourceFile := filepath.Join(tmpDir, "test.m4a")
+
+	if err := os.WriteFile(sourceFile, []byte("fake mp3"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(alacSourceFile, []byte("fake alac"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	config = Config{
+		SourceDir:          tmpDir,
+		TargetDir:          tmpDir,
+		UseDocker:          false,
+		NoPreserveMetadata: true,
+		SoxCommand:         "echo", // Mock command
+	}
+
+	t.Run("MP3ToFLAC", func(t *testing.T) {
+		err := processToFLAC(sourceFile, targetFile, ".mp3", nil)
+		if err == nil {
+			t.Log("processToFLAC unexpectedly succeeded")
+		} else {
+			t.Logf("Expected processToFLAC error: %v", err)
+		}
+	})
+
+	t.Run("ALACToFLAC", func(t *testing.T) {
+		err := processToFLAC(alacSourceFile, targetFile, ".m4a", nil)
+		if err == nil {
+			t.Log("processToFLAC ALAC conversion unexpectedly succeeded")
+		} else {
+			t.Logf("Expected processToFLAC ALAC error: %v", err)
+		}
+	})
+
+	t.Run("ALACToFLACWithAudioInfo", func(t *testing.T) {
+		audioInfo := &AudioInfo{Bits: 24, Rate: 96000, Format: "alac"}
+		err := processToFLAC(alacSourceFile, targetFile, ".m4a", audioInfo)
+		if err == nil {
+			t.Log("processToFLAC ALAC with audio info unexpectedly succeeded")
+		} else {
+			t.Logf("Expected processToFLAC ALAC with audio info error: %v", err)
+		}
+	})
+
+	t.Run("UnsupportedFormat", func(t *testing.T) {
+		err := processToFLAC(sourceFile, targetFile, ".wav", nil)
+		if err == nil {
+			t.Error("Expected error for unsupported format")
+		}
+	})
+
+	t.Run("MP3ToFLACWithDocker", func(t *testing.T) {
+		config.UseDocker = true
+		config.DockerImage = "test-image"
+		defer func() { config.UseDocker = false }()
+
+		err := processToFLAC(sourceFile, targetFile, ".mp3", nil)
+		if err == nil {
+			t.Log("processToFLAC with Docker unexpectedly succeeded")
+		} else {
+			t.Logf("Expected processToFLAC Docker error: %v", err)
+		}
+	})
+
+	t.Run("MP3ToFLACWithMetadata", func(t *testing.T) {
+		config.NoPreserveMetadata = false
+		defer func() { config.NoPreserveMetadata = true }()
+
+		err := processToFLAC(sourceFile, targetFile, ".mp3", nil)
+		if err == nil {
+			t.Log("processToFLAC with metadata unexpectedly succeeded")
+		} else {
+			t.Logf("Expected processToFLAC metadata error: %v", err)
+		}
+	})
+}
+
+func TestProcessToMP3(t *testing.T) {
+	originalConfig := config
+	defer func() { config = originalConfig }()
+
+	tmpDir, err := os.MkdirTemp("", "lilt-test-processmp3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	sourceFile := filepath.Join(tmpDir, "test.mp3")
+	targetFile := filepath.Join(tmpDir, "test_out.mp3")
+
+	if err := os.WriteFile(sourceFile, []byte("fake mp3"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	config = Config{
+		SourceDir:          tmpDir,
+		TargetDir:          tmpDir,
+		UseDocker:          false,
+		NoPreserveMetadata: true,
+		SoxCommand:         "echo", // Mock command
+	}
+
+	t.Run("MP3ToMP3Copy", func(t *testing.T) {
+		err := processToMP3(sourceFile, targetFile, ".mp3", nil)
+		if err != nil {
+			t.Errorf("processToMP3 copy failed: %v", err)
+		}
+	})
+
+	t.Run("FLACToMP3", func(t *testing.T) {
+		audioInfo := &AudioInfo{Bits: 16, Rate: 44100, Format: "flac"}
+		err := processToMP3(sourceFile, targetFile, ".flac", audioInfo)
+		if err == nil {
+			t.Log("processToMP3 conversion unexpectedly succeeded")
+		} else {
+			t.Logf("Expected processToMP3 error: %v", err)
+		}
+	})
+}
+
+func TestProcessToALAC(t *testing.T) {
+	originalConfig := config
+	defer func() { config = originalConfig }()
+
+	tmpDir, err := os.MkdirTemp("", "lilt-test-processalac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	sourceFile := filepath.Join(tmpDir, "test.m4a")
+	targetFile := filepath.Join(tmpDir, "test_out.m4a")
+
+	if err := os.WriteFile(sourceFile, []byte("fake alac"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	config = Config{
+		SourceDir:          tmpDir,
+		TargetDir:          tmpDir,
+		UseDocker:          false,
+		NoPreserveMetadata: true,
+		SoxCommand:         "echo", // Mock command
+	}
+
+	t.Run("ALACToALACCopy", func(t *testing.T) {
+		audioInfo := &AudioInfo{Bits: 16, Rate: 44100, Format: "alac"}
+		err := processToALAC(sourceFile, targetFile, ".m4a", audioInfo)
+		if err != nil {
+			t.Errorf("processToALAC copy failed: %v", err)
+		}
+	})
+
+	t.Run("ALACToALACConvert", func(t *testing.T) {
+		audioInfo := &AudioInfo{Bits: 24, Rate: 96000, Format: "alac"}
+		err := processToALAC(sourceFile, targetFile, ".m4a", audioInfo)
+		if err == nil {
+			t.Log("processToALAC conversion unexpectedly succeeded")
+		} else {
+			t.Logf("Expected processToALAC error: %v", err)
+		}
+	})
+
+	t.Run("MP3ToALAC", func(t *testing.T) {
+		audioInfo := &AudioInfo{Bits: 16, Rate: 44100, Format: "mp3"}
+		err := processToALAC(sourceFile, targetFile, ".mp3", audioInfo)
+		if err == nil {
+			t.Log("processToALAC from MP3 unexpectedly succeeded")
+		} else {
+			t.Logf("Expected processToALAC error: %v", err)
+		}
+	})
+
+	t.Run("UnsupportedFormat", func(t *testing.T) {
+		err := processToALAC(sourceFile, targetFile, ".wav", nil)
+		if err == nil {
+			t.Error("Expected error for unsupported format")
+		}
+	})
+}
+
+func TestConvertToMP3(t *testing.T) {
+	originalConfig := config
+	defer func() { config = originalConfig }()
+
+	tmpDir, err := os.MkdirTemp("", "lilt-test-convertmp3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	sourceFile := filepath.Join(tmpDir, "source.flac")
+	targetFile := filepath.Join(tmpDir, "target.mp3")
+
+	if err := os.WriteFile(sourceFile, []byte("fake flac"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	config = Config{
+		SourceDir:          tmpDir,
+		TargetDir:          tmpDir,
+		UseDocker:          false,
+		NoPreserveMetadata: true,
+		SoxCommand:         "echo", // Mock command
+	}
+
+	t.Run("ConvertWithAudioInfo", func(t *testing.T) {
+		audioInfo := &AudioInfo{Bits: 16, Rate: 48000, Format: "flac"}
+		err := convertToMP3(sourceFile, targetFile, audioInfo)
+		if err == nil {
+			t.Log("convertToMP3 unexpectedly succeeded")
+		} else {
+			t.Logf("Expected convertToMP3 error: %v", err)
+		}
+	})
+
+	t.Run("ConvertWithoutAudioInfo", func(t *testing.T) {
+		err := convertToMP3(sourceFile, targetFile, nil)
+		if err == nil {
+			t.Log("convertToMP3 without audio info unexpectedly succeeded")
+		} else {
+			t.Logf("Expected convertToMP3 error: %v", err)
+		}
+	})
+
+	config.UseDocker = true
+	config.DockerImage = "test-image"
+
+	t.Run("ConvertWithDocker", func(t *testing.T) {
+		audioInfo := &AudioInfo{Bits: 16, Rate: 44100, Format: "flac"}
+		err := convertToMP3(sourceFile, targetFile, audioInfo)
+		if err == nil {
+			t.Log("convertToMP3 with Docker unexpectedly succeeded")
+		} else {
+			t.Logf("Expected convertToMP3 Docker error: %v", err)
+		}
+	})
+
+	t.Run("ConvertWithMetadataPreservation", func(t *testing.T) {
+		config.NoPreserveMetadata = false
+		config.UseDocker = false
+
+		// Create temp files for metadata preservation test
+		tempFile := filepath.Join(tmpDir, "temp.mp3")
+		finalFile := filepath.Join(tmpDir, "final.mp3")
+
+		// Create a fake temp file
+		if err := os.WriteFile(tempFile, []byte("fake mp3 temp"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		audioInfo := &AudioInfo{Bits: 16, Rate: 44100, Format: "flac"}
+		err := convertToMP3(sourceFile, finalFile, audioInfo)
+
+		// This should attempt metadata preservation and likely fail with mock commands,
+		// but we're testing the code path
+		if err != nil {
+			t.Logf("convertToMP3 with metadata preservation failed as expected: %v", err)
+		}
+	})
+}
+
+func TestConvertToALAC(t *testing.T) {
+	originalConfig := config
+	defer func() { config = originalConfig }()
+
+	tmpDir, err := os.MkdirTemp("", "lilt-test-convertalac")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	sourceFile := filepath.Join(tmpDir, "source.flac")
+	targetFile := filepath.Join(tmpDir, "target.m4a")
+
+	if err := os.WriteFile(sourceFile, []byte("fake flac"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	config = Config{
+		SourceDir:          tmpDir,
+		TargetDir:          tmpDir,
+		UseDocker:          false,
+		NoPreserveMetadata: true,
+		SoxCommand:         "echo", // Mock command
+	}
+
+	t.Run("ConvertWithAudioInfo", func(t *testing.T) {
+		audioInfo := &AudioInfo{Bits: 16, Rate: 48000, Format: "flac"}
+		err := convertToALAC(sourceFile, targetFile, audioInfo)
+		if err == nil {
+			t.Log("convertToALAC unexpectedly succeeded")
+		} else {
+			t.Logf("Expected convertToALAC error: %v", err)
+		}
+	})
+
+	t.Run("ConvertWithoutAudioInfo", func(t *testing.T) {
+		err := convertToALAC(sourceFile, targetFile, nil)
+		if err == nil {
+			t.Log("convertToALAC without audio info unexpectedly succeeded")
+		} else {
+			t.Logf("Expected convertToALAC error: %v", err)
+		}
+	})
+
+	t.Run("ConvertWithHighBitDepth", func(t *testing.T) {
+		audioInfo := &AudioInfo{Bits: 24, Rate: 96000, Format: "flac"}
+		err := convertToALAC(sourceFile, targetFile, audioInfo)
+		if err == nil {
+			t.Log("convertToALAC with high bit depth unexpectedly succeeded")
+		} else {
+			t.Logf("Expected convertToALAC error: %v", err)
+		}
+	})
+
+	t.Run("ConvertWithDifferentSampleRates", func(t *testing.T) {
+		testRates := []int{44100, 88200, 176400, 352800}
+		for _, rate := range testRates {
+			audioInfo := &AudioInfo{Bits: 24, Rate: rate, Format: "flac"}
+			err := convertToALAC(sourceFile, targetFile, audioInfo)
+			if err == nil {
+				t.Logf("convertToALAC with rate %d unexpectedly succeeded", rate)
+			} else {
+				t.Logf("Expected convertToALAC error for rate %d: %v", rate, err)
+			}
+		}
+	})
+
+	config.UseDocker = true
+	config.DockerImage = "test-image"
+
+	t.Run("ConvertWithDocker", func(t *testing.T) {
+		audioInfo := &AudioInfo{Bits: 16, Rate: 44100, Format: "flac"}
+		err := convertToALAC(sourceFile, targetFile, audioInfo)
+		if err == nil {
+			t.Log("convertToALAC with Docker unexpectedly succeeded")
+		} else {
+			t.Logf("Expected convertToALAC Docker error: %v", err)
+		}
+	})
+
+	t.Run("ConvertWithMetadataPreservation", func(t *testing.T) {
+		config.NoPreserveMetadata = false
+		config.UseDocker = false
+
+		audioInfo := &AudioInfo{Bits: 16, Rate: 44100, Format: "flac"}
+		err := convertToALAC(sourceFile, targetFile, audioInfo)
+
+		// This should attempt metadata preservation and likely fail with mock commands,
+		// but we're testing the code path
+		if err != nil {
+			t.Logf("convertToALAC with metadata preservation failed as expected: %v", err)
+		}
+	})
+}
+
+func TestProcessAudioFilesWithEnforce(t *testing.T) {
+	originalConfig := config
+	defer func() { config = originalConfig }()
+
+	tmpDir, err := os.MkdirTemp("", "lilt-test-enforce-integration")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create test source directory structure
+	sourceDir := filepath.Join(tmpDir, "source")
+	targetDir := filepath.Join(tmpDir, "target")
+	if err := os.MkdirAll(sourceDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create test files
+	flacFile := filepath.Join(sourceDir, "test.flac")
+	mp3File := filepath.Join(sourceDir, "test.mp3")
+	alacFile := filepath.Join(sourceDir, "test.m4a")
+
+	if err := os.WriteFile(flacFile, []byte("fake flac"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(mp3File, []byte("fake mp3"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(alacFile, []byte("fake alac"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	config = Config{
+		SourceDir:           sourceDir,
+		TargetDir:           targetDir,
+		UseDocker:           false,
+		NoPreserveMetadata:  true,
+		SoxCommand:          "echo", // Mock command
+		EnforceOutputFormat: "mp3",
+	}
+
+	t.Run("EnforceMP3Integration", func(t *testing.T) {
+		err := processAudioFiles()
+		if err != nil {
+			t.Logf("processAudioFiles with enforce MP3: %v", err)
+		}
+		// Check that target directory was created
+		if _, err := os.Stat(targetDir); os.IsNotExist(err) {
+			t.Error("Target directory was not created")
+		}
+	})
+
+	config.EnforceOutputFormat = "flac"
+	t.Run("EnforceFLACIntegration", func(t *testing.T) {
+		// Clean target directory
+		os.RemoveAll(targetDir)
+		err := processAudioFiles()
+		if err != nil {
+			t.Logf("processAudioFiles with enforce FLAC: %v", err)
+		}
+	})
+
+	config.EnforceOutputFormat = "alac"
+	t.Run("EnforceALACIntegration", func(t *testing.T) {
+		// Clean target directory
+		os.RemoveAll(targetDir)
+		err := processAudioFiles()
+		if err != nil {
+			t.Logf("processAudioFiles with enforce ALAC: %v", err)
 		}
 	})
 }
