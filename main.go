@@ -33,8 +33,9 @@ type Config struct {
 
 // AudioInfo holds information about an audio file
 type AudioInfo struct {
-	Bits int
-	Rate int
+	Bits   int
+	Rate   int
+	Format string // "flac" or "alac"
 }
 
 var (
@@ -45,10 +46,10 @@ var (
 
 var rootCmd = &cobra.Command{
 	Use:   "lilt <source_directory>",
-	Short: "Convert Hi-Res FLAC files to 16-bit FLAC files",
-	Long: `Lilt - FLAC to 16-bit Converter
+	Short: "Convert Hi-Res FLAC/ALAC files to 16-bit FLAC files",
+	Long: `Lilt - FLAC/ALAC to 16-bit FLAC Converter
 
-This tool converts Hi-Res FLAC files to 16-bit FLAC files with a sample rate of 44.1kHz or 48kHz.
+This tool converts Hi-Res FLAC and ALAC files to 16-bit FLAC files with a sample rate of 44.1kHz or 48kHz.
 It also copies MP3 files and image files (JPG, PNG) to the target directory.
 
 Copyright (C) 2025 Arda Kilicdagi
@@ -148,14 +149,38 @@ func setupSoxCommand() error {
 			return fmt.Errorf("sox is not installed. Please install sox or use --use-docker option")
 		}
 
-		// Check for FFmpeg if preserving metadata in local mode
-		if !config.NoPreserveMetadata {
+		// Check for FFmpeg only when needed
+		needsFFmpeg := !config.NoPreserveMetadata
+
+		// Quick check if directory contains ALAC files (if metadata preservation is disabled)
+		if !needsFFmpeg {
+			hasALAC, _ := hasALACFiles(config.SourceDir)
+			needsFFmpeg = hasALAC
+		}
+
+		if needsFFmpeg {
 			if _, err := exec.LookPath("ffmpeg"); err != nil {
-				return fmt.Errorf("ffmpeg is not installed. Please install FFmpeg for metadata preservation or use --use-docker option")
+				return fmt.Errorf("ffmpeg is not installed. Please install FFmpeg for ALAC support and metadata preservation, or use --use-docker option")
 			}
 		}
 	}
 	return nil
+}
+
+func hasALACFiles(dir string) (bool, error) {
+	hasALAC := false
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // Continue walking even if there's an error with a specific file
+		}
+
+		if !info.IsDir() && strings.ToLower(filepath.Ext(path)) == ".m4a" {
+			hasALAC = true
+			return filepath.SkipAll // Found ALAC file, no need to continue
+		}
+		return nil
+	})
+	return hasALAC, err
 }
 
 func processAudioFiles() error {
@@ -169,7 +194,7 @@ func processAudioFiles() error {
 		}
 
 		ext := strings.ToLower(filepath.Ext(path))
-		if ext != ".flac" && ext != ".mp3" {
+		if ext != ".flac" && ext != ".mp3" && ext != ".m4a" {
 			return nil
 		}
 
@@ -194,18 +219,18 @@ func processAudioFiles() error {
 			return copyFile(path, targetPath)
 		}
 
-		// Process FLAC files
+		// Process FLAC and ALAC files
 		audioInfo, err := getAudioInfo(path)
 		if err != nil {
 			fmt.Printf("Warning: Could not get audio info for %s, copying original\n", path)
 			return copyFile(path, targetPath)
 		}
 
-		fmt.Printf("Detected: %d bits, %d Hz\n", audioInfo.Bits, audioInfo.Rate)
+		fmt.Printf("Detected: %d bits, %d Hz, %s format\n", audioInfo.Bits, audioInfo.Rate, audioInfo.Format)
 
 		needsConversion, bitrateArgs, sampleRateArgs := determineConversion(audioInfo)
 
-		if needsConversion {
+		if needsConversion || audioInfo.Format == "alac" {
 			// Determine target sample rate for display based on source rate
 			var targetRate string
 			switch audioInfo.Rate {
@@ -216,9 +241,21 @@ func processAudioFiles() error {
 			default:
 				targetRate = "same rate"
 			}
-			fmt.Printf("Converting FLAC: %s (%d-bit %d Hz → 16-bit %s)\n", path, audioInfo.Bits, audioInfo.Rate, targetRate)
-			if err := processFlac(path, targetPath, needsConversion, bitrateArgs, sampleRateArgs); err != nil {
-				fmt.Printf("Error: Sox conversion failed. Copying original file instead. Error: %v\n", err)
+
+			if audioInfo.Format == "alac" {
+				if needsConversion {
+					fmt.Printf("Converting ALAC to FLAC: %s (%d-bit %d Hz → 16-bit %s)\n", path, audioInfo.Bits, audioInfo.Rate, targetRate)
+				} else {
+					fmt.Printf("Converting ALAC to FLAC: %s (maintaining %d-bit %d Hz)\n", path, audioInfo.Bits, audioInfo.Rate)
+				}
+				// Always convert ALAC to FLAC, even if bit depth and sample rate are acceptable
+				targetPath = changeExtensionToFlac(targetPath)
+			} else {
+				fmt.Printf("Converting FLAC: %s (%d-bit %d Hz → 16-bit %s)\n", path, audioInfo.Bits, audioInfo.Rate, targetRate)
+			}
+
+			if err := processAudioFile(path, targetPath, audioInfo, needsConversion, bitrateArgs, sampleRateArgs); err != nil {
+				fmt.Printf("Error: Audio conversion failed. Copying original file instead. Error: %v\n", err)
 				return copyFile(path, targetPath)
 			}
 		} else {
@@ -231,6 +268,16 @@ func processAudioFiles() error {
 }
 
 func getAudioInfo(filePath string) (*AudioInfo, error) {
+	ext := strings.ToLower(filepath.Ext(filePath))
+
+	if ext == ".m4a" {
+		return getALACInfo(filePath)
+	} else {
+		return getFLACInfo(filePath)
+	}
+}
+
+func getFLACInfo(filePath string) (*AudioInfo, error) {
 	var cmd *exec.Cmd
 
 	if config.UseDocker {
@@ -249,7 +296,202 @@ func getAudioInfo(filePath string) (*AudioInfo, error) {
 		return nil, err
 	}
 
-	return parseAudioInfo(string(output))
+	audioInfo, err := parseAudioInfo(string(output))
+	if err != nil {
+		return nil, err
+	}
+
+	audioInfo.Format = "flac"
+	return audioInfo, nil
+}
+
+func getALACInfo(filePath string) (*AudioInfo, error) {
+	var cmd *exec.Cmd
+
+	if config.UseDocker {
+		dockerPath := getDockerPath(filePath)
+		args := []string{"run", "--rm", "--entrypoint", "ffprobe",
+			"-v", fmt.Sprintf("%s:/source", config.SourceDir),
+			"-v", fmt.Sprintf("%s:/target", config.TargetDir),
+			config.DockerImage,
+			"-v", "quiet", "-show_entries", "stream=sample_rate,bits_per_sample", "-of", "csv=p=0", dockerPath}
+		cmd = exec.Command("docker", args...)
+	} else {
+		// Check if ffprobe is available
+		if _, err := exec.LookPath("ffprobe"); err != nil {
+			return nil, fmt.Errorf("ffprobe is not installed. Please install FFmpeg for ALAC support or use --use-docker option")
+		}
+		cmd = exec.Command("ffprobe", "-v", "quiet", "-show_entries", "stream=sample_rate,bits_per_sample", "-of", "csv=p=0", filePath)
+	}
+
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	return parseALACInfo(string(output))
+}
+
+func parseALACInfo(info string) (*AudioInfo, error) {
+	lines := strings.Split(strings.TrimSpace(info), "\n")
+	if len(lines) == 0 {
+		return nil, fmt.Errorf("no audio stream information found")
+	}
+
+	// Take the first line (first audio stream)
+	parts := strings.Split(lines[0], ",")
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("invalid ffprobe output format")
+	}
+
+	rate, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	if err != nil {
+		return nil, fmt.Errorf("invalid sample rate: %s", parts[0])
+	}
+
+	bits, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil {
+		return nil, fmt.Errorf("invalid bit depth: %s", parts[1])
+	}
+
+	return &AudioInfo{
+		Bits:   bits,
+		Rate:   rate,
+		Format: "alac",
+	}, nil
+}
+
+func changeExtensionToFlac(filePath string) string {
+	ext := filepath.Ext(filePath)
+	return strings.TrimSuffix(filePath, ext) + ".flac"
+}
+
+func processAudioFile(sourcePath, targetPath string, audioInfo *AudioInfo, needsConversion bool, bitrateArgs, sampleRateArgs []string) error {
+	if audioInfo.Format == "alac" {
+		return processALAC(sourcePath, targetPath, needsConversion, bitrateArgs, sampleRateArgs)
+	} else {
+		return processFlac(sourcePath, targetPath, needsConversion, bitrateArgs, sampleRateArgs)
+	}
+}
+
+func processALAC(sourcePath, targetPath string, needsConversion bool, bitrateArgs, sampleRateArgs []string) error {
+	var tempPath string
+
+	if !config.NoPreserveMetadata {
+		// Create temporary path for conversion output with proper extension
+		ext := filepath.Ext(targetPath)
+		tempPath = strings.TrimSuffix(targetPath, ext) + ".tmp" + ext
+	} else {
+		tempPath = targetPath
+	}
+
+	// Convert ALAC to FLAC using FFmpeg, with optional quality adjustments via SoX
+	var cmd *exec.Cmd
+
+	if needsConversion {
+		// Two-step process: ALAC -> temp FLAC via FFmpeg, then temp FLAC -> final FLAC via SoX
+		tempAlacFlac := strings.TrimSuffix(tempPath, ".flac") + ".alac_temp.flac"
+
+		// Step 1: Convert ALAC to FLAC using FFmpeg
+		if config.UseDocker {
+			dockerSource := getDockerPath(sourcePath)
+			dockerTempAlac := getDockerTargetPath(tempAlacFlac)
+
+			args := []string{"run", "--rm", "--entrypoint", "ffmpeg",
+				"-v", fmt.Sprintf("%s:/source", config.SourceDir),
+				"-v", fmt.Sprintf("%s:/target", config.TargetDir),
+				config.DockerImage,
+				"-i", dockerSource,
+				"-c:a", "flac",
+				dockerTempAlac}
+
+			cmd = exec.Command("docker", args...)
+		} else {
+			// Check if ffmpeg is available
+			if _, err := exec.LookPath("ffmpeg"); err != nil {
+				return fmt.Errorf("ffmpeg is not installed. Please install FFmpeg for ALAC support or use --use-docker option")
+			}
+			cmd = exec.Command("ffmpeg", "-i", sourcePath, "-c:a", "flac", tempAlacFlac)
+		}
+
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("FFmpeg ALAC to FLAC conversion failed: %w", err)
+		}
+		defer os.Remove(tempAlacFlac) // Clean up intermediate file
+
+		// Step 2: Process with SoX for quality adjustment
+		if config.UseDocker {
+			dockerTempAlac := getDockerTargetPath(tempAlacFlac)
+			dockerTemp := getDockerTargetPath(tempPath)
+
+			args := []string{"run", "--rm",
+				"-v", fmt.Sprintf("%s:/source", config.SourceDir),
+				"-v", fmt.Sprintf("%s:/target", config.TargetDir),
+				config.DockerImage, "--multi-threaded", "-G", dockerTempAlac}
+
+			args = append(args, bitrateArgs...)
+			args = append(args, dockerTemp)
+			args = append(args, sampleRateArgs...)
+			args = append(args, "dither")
+
+			cmd = exec.Command("docker", args...)
+		} else {
+			args := []string{"--multi-threaded", "-G", tempAlacFlac}
+			args = append(args, bitrateArgs...)
+			args = append(args, tempPath)
+			args = append(args, sampleRateArgs...)
+			args = append(args, "dither")
+
+			cmd = exec.Command(config.SoxCommand, args...)
+		}
+
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("SoX quality adjustment failed: %w", err)
+		}
+	} else {
+		// Direct conversion ALAC to FLAC without quality changes
+		if config.UseDocker {
+			dockerSource := getDockerPath(sourcePath)
+			dockerTemp := getDockerTargetPath(tempPath)
+
+			args := []string{"run", "--rm", "--entrypoint", "ffmpeg",
+				"-v", fmt.Sprintf("%s:/source", config.SourceDir),
+				"-v", fmt.Sprintf("%s:/target", config.TargetDir),
+				config.DockerImage,
+				"-i", dockerSource,
+				"-c:a", "flac",
+				dockerTemp}
+
+			cmd = exec.Command("docker", args...)
+		} else {
+			// Check if ffmpeg is available
+			if _, err := exec.LookPath("ffmpeg"); err != nil {
+				return fmt.Errorf("ffmpeg is not installed. Please install FFmpeg for ALAC support or use --use-docker option")
+			}
+			cmd = exec.Command("ffmpeg", "-i", sourcePath, "-c:a", "flac", tempPath)
+		}
+
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("FFmpeg ALAC to FLAC conversion failed: %w", err)
+		}
+	}
+
+	if !config.NoPreserveMetadata {
+		// Merge metadata using FFmpeg
+		if mergeErr := mergeMetadataWithFFmpeg(sourcePath, tempPath, targetPath); mergeErr != nil {
+			fmt.Printf("Warning: Metadata preservation failed for %s, keeping converted audio without tags: %v\n", targetPath, mergeErr)
+			// Fallback: rename temp to target
+			if renameErr := os.Rename(tempPath, targetPath); renameErr != nil {
+				return fmt.Errorf("fallback rename failed after metadata merge error: %w", renameErr)
+			}
+			return nil
+		}
+		// If merge succeeded, temp is already removed in merge function
+	} else {
+		// If not preserving metadata, tempPath == targetPath, no action needed
+	}
+
+	return nil
 }
 
 func parseAudioInfo(info string) (*AudioInfo, error) {

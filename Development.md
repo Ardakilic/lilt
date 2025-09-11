@@ -124,10 +124,28 @@ Current test coverage: ~68%
 
 Key test areas:
 - Version comparison logic
-- Audio file processing
+- Audio file processing (FLAC and ALAC)
 - Docker integration
 - Self-update functionality
 - Error handling
+- ALAC to FLAC conversion logic
+- Audio format detection
+
+### Testing ALAC Support
+
+The ALAC support includes tests for:
+- ALAC audio info parsing using ffprobe
+- File extension conversion (.m4a → .flac)
+- Format-specific processing logic
+- Integration with existing FLAC conversion rules
+
+```bash
+# Run ALAC-specific tests
+go test -v -run "ALAC"
+
+# Test audio format detection
+go test -v -run "TestGetAudioInfo"
+```
 
 ## Building for Different Platforms
 
@@ -260,6 +278,29 @@ The application uses standard Go logging. For more verbose output:
 6. Submit pull request
 
 ## Recent Fixes and Improvements
+
+### ALAC Support Addition
+
+Added comprehensive support for Apple Lossless Audio Codec (ALAC) files:
+
+**Features:**
+- Detects ALAC files (.m4a extension) and processes them appropriately
+- Converts all ALAC files to FLAC format for consistency
+- 16-bit 44.1kHz/48kHz ALAC files are converted to FLAC maintaining the same quality
+- Hi-Res ALAC files follow the same conversion rules as FLAC files (downsampling and bit depth reduction)
+- Preserves metadata and cover art from ALAC files using FFmpeg
+
+**Technical Implementation:**
+- Uses FFmpeg's ffprobe to detect ALAC audio properties (bit depth, sample rate)
+- Two-step conversion process for Hi-Res ALAC: ALAC → temp FLAC → final FLAC (with SoX processing)
+- Direct FFmpeg conversion for standard quality ALAC files
+- Integrated with existing metadata preservation system
+- Added comprehensive unit tests for ALAC functionality
+
+**Dependencies:**
+- FFmpeg is now required for both local and Docker execution due to ALAC support
+- Updated error messages to reflect FFmpeg requirement
+- Docker image already includes FFmpeg support
 
 ### Cover Art Preservation Fix
 
