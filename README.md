@@ -44,6 +44,15 @@ chmod +x install.sh
 ./install.sh
 ```
 
+### Homebrew Installation (macOS)
+
+For macOS users, you can install Lilt using Homebrew:
+
+```bash
+brew tap Ardakilic/lilt
+brew install lilt
+```
+
 ### Download Pre-built Binaries
 
 Download the latest release for your platform from the [Releases](https://github.com/Ardakilic/lilt/releases) page:
