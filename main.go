@@ -454,14 +454,14 @@ func getALACInfo(filePath string) (*AudioInfo, error) {
 			"-v", fmt.Sprintf("%s:/source", config.SourceDir),
 			"-v", fmt.Sprintf("%s:/target", config.TargetDir),
 			config.DockerImage,
-			"-v", "quiet", "-show_entries", "stream=sample_rate,bits_per_sample", "-of", "csv=p=0", dockerPath}
+			"-v", "quiet", "-show_entries", "stream=sample_rate,bits_per_raw_sample", "-of", "csv=p=0", dockerPath}
 		cmd = exec.Command("docker", args...)
 	} else {
 		// Check if ffprobe is available
 		if _, err := exec.LookPath("ffprobe"); err != nil {
 			return nil, fmt.Errorf("ffprobe is not installed. Please install FFmpeg for ALAC support or use --use-docker option")
 		}
-		cmd = exec.Command("ffprobe", "-v", "quiet", "-show_entries", "stream=sample_rate,bits_per_sample", "-of", "csv=p=0", filePath)
+		cmd = exec.Command("ffprobe", "-v", "quiet", "-show_entries", "stream=sample_rate,bits_per_raw_sample", "-of", "csv=p=0", filePath)
 	}
 
 	output, err := cmd.Output()
@@ -478,27 +478,41 @@ func parseALACInfo(info string) (*AudioInfo, error) {
 		return nil, fmt.Errorf("no audio stream information found")
 	}
 
-	// Take the first line (first audio stream)
-	parts := strings.Split(lines[0], ",")
-	if len(parts) < 2 {
-		return nil, fmt.Errorf("invalid ffprobe output format")
+	// Look for the first line that contains valid audio stream data (both rate and bits)
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		parts := strings.Split(line, ",")
+		if len(parts) < 2 {
+			continue // Skip lines that don't have both values
+		}
+
+		rate, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+		if err != nil {
+			continue // Skip lines with invalid sample rate
+		}
+
+		bits, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+		if err != nil {
+			continue // Skip lines with invalid bit depth
+		}
+
+		// Skip streams that don't look like audio (rate should be reasonable)
+		if rate < 8000 || rate > 500000 {
+			continue
+		}
+
+		return &AudioInfo{
+			Bits:   bits,
+			Rate:   rate,
+			Format: "alac",
+		}, nil
 	}
 
-	rate, err := strconv.Atoi(strings.TrimSpace(parts[0]))
-	if err != nil {
-		return nil, fmt.Errorf("invalid sample rate: %s", parts[0])
-	}
-
-	bits, err := strconv.Atoi(strings.TrimSpace(parts[1]))
-	if err != nil {
-		return nil, fmt.Errorf("invalid bit depth: %s", parts[1])
-	}
-
-	return &AudioInfo{
-		Bits:   bits,
-		Rate:   rate,
-		Format: "alac",
-	}, nil
+	return nil, fmt.Errorf("no valid audio stream information found")
 }
 
 func changeExtensionToFlac(filePath string) string {

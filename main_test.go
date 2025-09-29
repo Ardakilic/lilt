@@ -3850,9 +3850,15 @@ func TestParseALACInfo(t *testing.T) {
 			hasError: false,
 		},
 		{
-			name:     "Multiple streams - takes first",
+			name:     "Multiple streams - takes first valid audio stream",
 			input:    "48000,24\n96000,16\n",
 			expected: &AudioInfo{Bits: 24, Rate: 48000, Format: "alac"},
+			hasError: false,
+		},
+		{
+			name:     "Audio stream with cover art - like real ALAC file",
+			input:    "88200,24\n8\n",
+			expected: &AudioInfo{Bits: 24, Rate: 88200, Format: "alac"},
 			hasError: false,
 		},
 		{
