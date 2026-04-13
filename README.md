@@ -169,6 +169,66 @@ Alternative Docker images you can use:
 - `bigpapoo/sox`: Another SoX Docker image
 - Any image that provides SoX installed as the `sox` command
 
+## Serena MCP (Semantic Code Retrieval)
+
+Lilt includes [Serena](https://github.com/oraios/serena) — a semantic code retrieval MCP server that gives AI coding tools (Claude Code, OpenCode, VS Code extensions, etc.) IDE-level understanding of the codebase through symbol indexing, semantic search, and structured editing. Serena uses `gopls` (the Go language server) for deep Go-specific code understanding.
+
+### Starting Serena
+
+```bash
+make serena-up
+```
+
+### Available Commands
+
+| Command | Description |
+|---------|-------------|
+| `make serena-up` | Start Serena MCP service |
+| `make serena-stop` | Stop Serena MCP service |
+| `make serena-logs` | View Serena logs |
+| `make serena-index` | Index the project workspace |
+| `make serena-health` | Health check the project workspace |
+
+### Ports
+
+| Service | Port |
+|---------|------|
+| SSE (MCP endpoint) | 10122 |
+| Dashboard | 34283 |
+
+Access the Serena dashboard at http://localhost:34283
+
+### Connecting AI Clients
+
+**OpenCode** — `opencode.jsonc` is pre-configured in the project root.
+
+**Claude Code:**
+```bash
+claude mcp add serena --transport sse --url http://localhost:10122/sse
+```
+
+**VS Code / Cursor / Windsurf:**
+
+Create `.vscode/mcp.json`:
+```json
+{
+  "mcpServers": {
+    "serena": {
+      "type": "sse",
+      "url": "http://localhost:10122/sse"
+    }
+  }
+}
+```
+
+### Re-indexing After Structural Changes
+
+After adding new packages, renaming functions, or making other structural changes, re-index the project:
+
+```bash
+make serena-index
+```
+
 ## How It Works
 
 ### Default Behavior (without --enforce-output-format)

@@ -1,0 +1,20 @@
+services:
+  # Serena MCP (semantic code retrieval for AI tools)
+  serena:
+    image: ghcr.io/oraios/serena:latest
+    container_name: lilt-serena
+    restart: unless-stopped
+    environment:
+      - SERENA_DOCKER=1
+    ports:
+      - "10122:9121"   # SSE endpoint (non-standard to avoid cross-project conflicts)
+      - "34283:24282"  # Web dashboard (non-standard to avoid cross-project conflicts)
+    volumes:
+      - .:/workspace/lilt
+    command: >
+      serena start-mcp-server
+        --transport sse
+        --port 9121
+        --host 0.0.0.0
+        --context desktop-app
+        --project /workspace/lilt
