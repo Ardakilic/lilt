@@ -120,11 +120,11 @@ jobs:
         name: Release ${{ github.ref_name }}
         body: |
           ## Lilt ${{ github.ref_name }}
-          
+
           Cross-platform FLAC to 16-bit audio converter.
-          
+
           Download the appropriate binary for your system from the assets below.
-          
+
           ### Quick Install (Unix-like systems)
           ```bash
           curl -sSL https://raw.githubusercontent.com/Ardakilic/lilt/main/install.sh | bash
@@ -133,3 +133,79 @@ jobs:
         draft: false
         prerelease: false
         make_latest: true
+
+  bump-homebrew-tap:
+    name: Bump Homebrew tap
+    runs-on: ubuntu-latest
+    needs: [release]
+    steps:
+      - name: Checkout homebrew-tap
+        uses: actions/checkout@v6
+        with:
+          repository: Ardakilic/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Compute SHA256 for darwin tarballs
+        id: sha
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/Ardakilic/lilt/releases/download/${TAG}"
+          for arch in arm64 amd64; do
+            file="lilt-darwin-${arch}.tar.gz"
+            downloaded=false
+            for i in 1 2 3 4 5; do
+              if curl -fsSL -o "$file" "${BASE}/${file}"; then downloaded=true; break; fi
+              echo "Attempt $i failed, retrying in 10s…"
+              sleep 10
+            done
+            if [ "$downloaded" = false ]; then
+              echo "Failed to download ${file} after 5 attempts."
+              exit 1
+            fi
+            sha=$(sha256sum "$file" | awk '{print $1}')
+            echo "${arch}=${sha}" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Update formula
+        env:
+          TAG: ${{ github.ref_name }}
+          SHA_ARM64: ${{ steps.sha.outputs.arm64 }}
+          SHA_AMD64: ${{ steps.sha.outputs.amd64 }}
+        run: |
+          set -euo pipefail
+          cd homebrew-tap
+          python3 - "Formula/lilt.rb" "$TAG" "$SHA_ARM64" "$SHA_AMD64" <<'PY'
+          import re, sys, pathlib
+          path, tag, sha_arm, sha_amd = sys.argv[1:]
+          src = pathlib.Path(path).read_text()
+          def bump(text, arch, sha):
+              pat = re.compile(
+                  r'(url\s+"https://github\.com/Ardakilic/lilt/releases/download/)'
+                  r'[^/]+'
+                  r'(/lilt-darwin-' + arch + r'\.tar\.gz"\s*\n\s*sha256\s+")'
+                  r'[0-9a-f]{64}(")'
+              )
+              return pat.sub(rf'\g<1>{tag}\g<2>{sha}\g<3>', text, count=1)
+          src = bump(src, "arm64", sha_arm)
+          src = bump(src, "amd64", sha_amd)
+          pathlib.Path(path).write_text(src)
+          PY
+          if git diff --exit-code Formula/lilt.rb; then
+            echo "Formula already at ${TAG}, nothing to commit."
+            exit 0
+          fi
+
+      - name: Commit and push
+        working-directory: homebrew-tap
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/lilt.rb
+          git commit -m "lilt ${TAG}"
+          git push

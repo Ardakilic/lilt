@@ -214,8 +214,9 @@ go build -ldflags="-X main.version=v1.0.0" -o lilt .
    git tag v1.0.0
    git push origin v1.0.0
    ```
-3. GitHub Actions will automatically build and create release
-4. Update release notes with changes
+3. GitHub Actions automatically builds all platform binaries and creates the GitHub Release.
+4. The `bump-homebrew-tap` job then updates `Ardakilic/homebrew-tap` automatically (see [Homebrew Tap Automation](#homebrew-tap-automation) below).
+5. Update release notes with changes if needed.
 
 ### Pre-release Builds
 
@@ -363,7 +364,38 @@ This fix applies to both local FFmpeg execution and Docker-based execution.
 The project uses GitHub Actions for:
 - Automated testing on all platforms
 - Cross-platform builds
-- Release creation
+- Release creation and Homebrew tap updates
 - Code quality checks
 
 Workflow files are in `.github/workflows/`.
+
+## Homebrew Tap Automation
+
+When a `v*` tag is pushed, the `bump-homebrew-tap` job in `release.yml` automatically updates the formula in `Ardakilic/homebrew-tap` so `brew install lilt` always reflects the latest release. It runs after the GitHub Release is published and:
+
+1. Downloads `lilt-darwin-arm64.tar.gz` and `lilt-darwin-amd64.tar.gz` from the new release.
+2. Computes SHA-256 for each tarball.
+3. Rewrites the `url` and `sha256` fields for both architectures in `Formula/lilt.rb`.
+4. Commits and pushes directly to `main` of `Ardakilic/homebrew-tap`.
+
+### Required secret
+
+The job needs a GitHub PAT with write access to the tap repo. Without it the job will fail and the tap will not be updated.
+
+**Create the token** at `https://github.com/settings/personal-access-tokens/new`:
+
+| Setting | Value |
+|---|---|
+| Token name | `lilt-homebrew-tap-bumper` (or any name) |
+| Resource owner | `Ardakilic` |
+| Repository access | Only `homebrew-tap` |
+| Repository permissions → Contents | Read and write |
+
+**Add it as a secret** on this repo at `https://github.com/Ardakilic/lilt/settings/secrets/actions/new`:
+
+| Field | Value |
+|---|---|
+| Name | `HOMEBREW_TAP_TOKEN` |
+| Secret | the PAT value |
+
+Without this secret the `bump-homebrew-tap` job will fail and the tap will not be updated. The default `GITHUB_TOKEN` cannot be used because it cannot push to a different repository.
