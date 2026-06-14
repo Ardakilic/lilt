@@ -97,10 +97,32 @@ help:
 	@echo ""
 	@echo "Serena MCP:"
 	@echo "  serena-up         Start Serena MCP service"
-	@echo "  serena-stop       Stop Serena MCP service"
+	@echo "  serena-down       Stop Serena MCP service"
+	@echo "  serena-build     Build/rebuild Serena Docker image"
 	@echo "  serena-logs      View Serena logs"
 	@echo "  serena-index     Index the project workspace"
 	@echo "  serena-health    Health check the project workspace"
+
+# ── Serena MCP ──────────────────────────────────────────────────────────
+
+serena-up: ## Start Serena MCP service
+	docker compose --profile serena up serena -d
+
+serena-down: ## Down Serena MCP service (removes container)
+	docker compose --profile serena down serena
+
+serena-build: ## Build/rebuild Serena Docker image
+	docker compose --profile serena build serena
+
+serena-logs: ## Follow Serena logs
+	docker compose --profile serena logs -f serena
+
+serena-index: ## Index project with Serena
+	docker compose --profile serena exec serena serena project index /workspace/lilt
+
+serena-health: ## Check Serena health
+	@http_status=$$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 --connect-timeout 2 http://localhost:10123/sse 2>/dev/null || true); \
+	if [ "$${http_status}" = "200" ]; then echo "✓ Serena is healthy"; else echo "✗ Serena is not responding"; fi
 
 # ============================================
 # Docker Build Commands
@@ -137,4 +159,4 @@ lint-docker:
 	docker run --rm -v $$(pwd):/src $(GO_IMAGE) \
 		sh -c "golangci-lint run || true"
 
-.PHONY: build clean test fmt lint build-all package install uninstall serena-up serena-stop serena-logs serena-index serena-health help build-docker build-all-docker install-deps-docker test-docker fmt-docker lint-docker
+.PHONY: build clean test fmt lint build-all package install uninstall serena-up serena-down serena-build serena-logs serena-index serena-health help build-docker build-all-docker install-deps-docker test-docker fmt-docker lint-docker

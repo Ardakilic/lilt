@@ -26,14 +26,31 @@ Lilt is a single-module Go CLI project. Serena's gopls integration provides:
 ┌─────────────┐     ┌─────────────────┐     ┌─────────────┐
 │  AI Client  │────▶│  Serena Docker  │────▶│    gopls   │
 │ (OpenCode, │     │   Container     │     │  Language  │
-│ Claude,    │◀────│  (port 10122)   │◀────│  Server    │
+│ Claude,    │◀────│  (port 10123)   │◀────│  Server    │
 │  Cursor)   │     │                 │     │            │
 └─────────────┘     └─────────────────┘     └─────────────┘
 ```
 
-- **Host**: AI client connects to `localhost:10122`
+- **Host**: AI client connects to `localhost:10123`
 - **Container**: Serena MCP server runs in Docker (port 9121 internal)
 - **gopls**: Go language server indexes the mounted workspace
+
+## Docker Image
+
+Lilt uses a custom Serena image (`Dockerfile.serena`) because the stock `ghcr.io/oraios/serena:latest` image does not include the Go toolchain or `gopls`, both of which are required for Serena's Go language-server support. The custom image is built automatically by Docker Compose on first run:
+
+```dockerfile
+FROM golang:1.26.2-trixie AS go-toolchain
+FROM ghcr.io/oraios/serena:latest
+
+COPY --from=go-toolchain /usr/local/go /usr/local/go
+ENV PATH="/usr/local/go/bin:${PATH}"
+
+RUN go install golang.org/x/tools/gopls@latest
+ENV PATH="/root/go/bin:${PATH}"
+```
+
+This keeps the Go version aligned with the project's build image and avoids host dependencies.
 
 ## Volume Mount
 
@@ -69,12 +86,12 @@ serena start-mcp-server \
 
 | Endpoint | Container Port | Host Port | Purpose |
 |----------|-----------------|-----------|----------|
-| SSE | 9121 | 10122 | MCP client connections |
-| Dashboard | 24282 | 34283 | Serena web UI for inspection |
+| SSE | 9121 | 10123 | MCP client connections |
+| Dashboard | 24282 | 34284 | Serena web UI for inspection |
 
-Non-standard ports are used to avoid conflicts with other projects (e.g., BrewForm uses 10121/34282).
+Non-standard ports are used to avoid conflicts with other projects (e.g., BrewForm uses 10122/34283).
 
-Access the dashboard at http://localhost:34283
+Access the dashboard at http://localhost:34284
 
 ## What Is Ignored and Why
 
@@ -144,7 +161,7 @@ Most projects don't need these customizations.
   "mcp": {
     "serena": {
       "type": "remote",
-      "url": "http://localhost:10122/sse",
+      "url": "http://localhost:10123/sse",
       "enabled": true
     }
   }
@@ -154,7 +171,7 @@ Most projects don't need these customizations.
 ### Claude Code
 
 ```bash
-claude mcp add serena --transport sse --url http://localhost:10122/sse
+claude mcp add serena --transport sse --url http://localhost:10123/sse
 ```
 
 ### VS Code / Cursor / Windsurf
@@ -166,7 +183,7 @@ Create `.vscode/mcp.json`:
   "mcpServers": {
     "serena": {
       "type": "sse",
-      "url": "http://localhost:10122/sse"
+      "url": "http://localhost:10123/sse"
     }
   }
 }
@@ -177,7 +194,8 @@ Create `.vscode/mcp.json`:
 | Command | Description |
 |---------|-------------|
 | `make serena-up` | Start Serena MCP service |
-| `make serena-stop` | Stop Serena MCP service |
+| `make serena-down` | Stop Serena MCP service |
+| `make serena-build` | Build/rebuild Serena Docker image |
 | `make serena-logs` | View Serena logs |
 | `make serena-index` | Index the project workspace |
 | `make serena-health` | Health check the project workspace |
@@ -190,7 +208,7 @@ If clients report "project not found", ensure the container is running and the p
 
 ```bash
 make serena-up
-docker compose exec serena serena project index /workspace/lilt
+docker compose --profile serena exec serena serena project index /workspace/lilt
 ```
 
 ### Slow Start
@@ -213,8 +231,8 @@ make serena-index
 
 ### Dashboard Unreachable
 
-Ensure the dashboard port (34283) is not in use by another application:
+Ensure the dashboard port (34284) is not in use by another application:
 
 ```bash
-lsof -i :34283
+lsof -i :34284
 ```
