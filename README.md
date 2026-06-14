@@ -23,6 +23,7 @@ Lilt stands for "lightweight intelligent lossless transcoder". It is also a form
 - 📝 Preserves ID3 tags and cover art from original files using FFmpeg (default: enabled; use --no-preserve-metadata to disable)
 - 🎶 Copies MP3 files without modification (unless format enforcement is enabled)
 - 🖼️ Optional: Copies JPG and PNG images from the source directory
+- 🔗 Optional: Creates filesystem hardlinks instead of copies for unchanged files with `--prefer-hardlinks`
 - 🐳 Docker support for containerized execution
 - 💻 Cross-platform: Windows, macOS, Linux (x64, ARM64, x86, ARM)
 
@@ -102,6 +103,7 @@ lilt <source_directory> [options]
 --copy-images                   Copy JPG and PNG files
 --no-preserve-metadata          Do not preserve ID3 tags and cover art using FFmpeg (default: false)
 --enforce-output-format <fmt>   Enforce output format for all files: flac, mp3, or alac
+--prefer-hardlinks              Prefer filesystem hardlinks over copying for files that do not need transcoding
 --use-docker                    Use Docker to run Sox instead of local installation
 --docker-image <img>            Specify Docker image (default: ardakilic/sox_ng:latest)
 --self-update                   Check for updates and self-update if newer version available
@@ -149,6 +151,20 @@ Check for updates:
 ```bash
 lilt --self-update
 ```
+
+### Preferring Hardlinks
+
+When source and target directories reside on the same filesystem, you can use `--prefer-hardlinks` to create filesystem hardlinks for files that do not need transcoding instead of making full copies. This saves disk space while preserving the directory structure. If a hardlink cannot be created (cross-device link, unsupported filesystem, etc.), `lilt` falls back to a normal copy and emits a warning.
+
+```bash
+# Windows
+lilt.exe "C:\Music\MyAlbum" --target-dir "C:\Music\MyAlbum-16bit" --prefer-hardlinks
+
+# macOS/Linux
+./lilt ~/Music/MyAlbum --target-dir ~/Music/MyAlbum-16bit --prefer-hardlinks
+```
+
+> **Note:** Hardlinks share inode data. Any in-place modification to the source or target file will affect both paths.
 
 ## Docker Support
 
@@ -246,7 +262,8 @@ make serena-index
 4. ID3 tags and cover art are preserved from source to converted files using FFmpeg (unless --no-preserve-metadata is used)
 5. MP3 files are copied without modification
 6. If `--copy-images` is enabled, `.jpg` and `.png` files are copied to the target directory
-7. The original folder structure is preserved in the target directory
+7. If `--prefer-hardlinks` is enabled, files that do not need transcoding are created as filesystem hardlinks when possible; otherwise, they are copied as usual
+8. The original folder structure is preserved in the target directory
 
 ### Format Enforcement Mode (with --enforce-output-format)
 

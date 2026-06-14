@@ -31,6 +31,7 @@ type Config struct {
 	SoxCommand          string
 	NoPreserveMetadata  bool
 	EnforceOutputFormat string // "flac", "mp3", "alac", or empty for default behavior
+	PreferHardlinks     bool
 }
 
 // AudioInfo holds information about an audio file
@@ -46,6 +47,9 @@ var (
 	selfUpdateFlag bool
 )
 
+// osLink is a package-level alias for os.Link to allow tests to inject failures.
+var osLink = os.Link
+
 var rootCmd = &cobra.Command{
 	Use:   "lilt <source_directory>",
 	Short: "Convert Hi-Res FLAC/ALAC files to 16-bit FLAC files",
@@ -58,6 +62,10 @@ With the --enforce-output-format flag, you can convert all audio files to a spec
 - flac: Convert all files to 16-bit FLAC
 - mp3: Convert all files to 320kbps MP3
 - alac: Convert all files to 16-bit ALAC (M4A)
+
+With the --prefer-hardlinks flag, files that do not need transcoding are created as
+filesystem hardlinks instead of full copies when source and target reside on the same
+filesystem. Hardlink failures fall back to the normal copy behavior.
 
 Copyright (C) 2025 Arda Kilicdagi
 Licensed under MIT License`,
@@ -73,6 +81,7 @@ func init() {
 	rootCmd.Flags().StringVar(&config.DockerImage, "docker-image", "ardakilic/sox_ng:latest", "Specify Docker image")
 	rootCmd.Flags().BoolVar(&config.NoPreserveMetadata, "no-preserve-metadata", false, "Do not preserve ID3 tags and cover art using FFmpeg (metadata is preserved by default)")
 	rootCmd.Flags().StringVar(&config.EnforceOutputFormat, "enforce-output-format", "", "Enforce output format for all files: flac, mp3, or alac")
+	rootCmd.Flags().BoolVar(&config.PreferHardlinks, "prefer-hardlinks", false, "Prefer filesystem hardlinks over copying for files that do not need transcoding")
 	rootCmd.Flags().BoolVar(&selfUpdateFlag, "self-update", false, "Check for updates and self-update if newer version available")
 
 	// Set default values
@@ -237,7 +246,7 @@ func processAudioFiles() error {
 		// Original processing logic when no format enforcement
 		// Handle MP3 files - just copy them
 		if ext == ".mp3" {
-			fmt.Printf("Copying MP3 file: %s\n", path)
+			fmt.Printf("Transcode not needed: Copying or Hardlinking MP3 file: %s\n", path)
 			return copyFile(path, targetPath)
 		}
 
@@ -281,7 +290,7 @@ func processAudioFiles() error {
 				return copyFile(path, targetPath)
 			}
 		} else {
-			fmt.Printf("Copying FLAC: %s\n", path)
+			fmt.Printf("Transcode not needed: Copying or Hardlinking FLAC: %s\n", path)
 			return copyFile(path, targetPath)
 		}
 
@@ -296,7 +305,7 @@ func processAudioFileWithEnforcedFormat(sourcePath, targetPath, sourceExt string
 
 	// Skip MP3 files if they don't need processing
 	if sourceExt == ".mp3" && config.EnforceOutputFormat == "mp3" {
-		fmt.Printf("Copying MP3 file: %s (already in target format)\n", sourcePath)
+		fmt.Printf("Transcode not needed: Copying or Hardlinking MP3 file: %s (already in target format)\n", sourcePath)
 		return copyFile(sourcePath, targetPath)
 	}
 
@@ -329,7 +338,7 @@ func processToFLAC(sourcePath, targetPath, sourceExt string, audioInfo *AudioInf
 
 	if sourceExt == ".mp3" {
 		// Never convert MP3 to FLAC - just copy the original MP3
-		fmt.Printf("Copying MP3: %s (MP3 files are not converted to lossless formats)\n", sourcePath)
+		fmt.Printf("Transcode not needed: Copying or Hardlinking MP3: %s (MP3 files are not converted to lossless formats)\n", sourcePath)
 		// Keep original extension for MP3
 		originalTargetPath := strings.TrimSuffix(targetPath, ".flac") + ".mp3"
 		return copyFile(sourcePath, originalTargetPath)
@@ -339,7 +348,7 @@ func processToFLAC(sourcePath, targetPath, sourceExt string, audioInfo *AudioInf
 		// Check if FLAC needs conversion or can be copied
 		needsConversion, bitrateArgs, sampleRateArgs := determineConversion(audioInfo)
 		if !needsConversion {
-			fmt.Printf("Copying FLAC: %s (already 16-bit)\n", sourcePath)
+			fmt.Printf("Transcode not needed: Copying or Hardlinking FLAC: %s (already 16-bit)\n", sourcePath)
 			return copyFile(sourcePath, targetPath)
 		} else {
 			fmt.Printf("Converting FLAC: %s (reducing quality to 16-bit)\n", sourcePath)
@@ -366,7 +375,7 @@ func processToMP3(sourcePath, targetPath, sourceExt string, audioInfo *AudioInfo
 	targetPath = changeExtensionToMP3(targetPath)
 
 	if sourceExt == ".mp3" {
-		fmt.Printf("Copying MP3: %s (already in target format)\n", sourcePath)
+		fmt.Printf("Transcode not needed: Copying or Hardlinking MP3: %s (already in target format)\n", sourcePath)
 		return copyFile(sourcePath, targetPath)
 	}
 
@@ -382,7 +391,7 @@ func processToALAC(sourcePath, targetPath, sourceExt string, audioInfo *AudioInf
 	if sourceExt == ".m4a" && audioInfo != nil {
 		// Check if ALAC needs conversion or can be copied
 		if audioInfo.Bits == 16 && (audioInfo.Rate == 44100 || audioInfo.Rate == 48000) {
-			fmt.Printf("Copying ALAC: %s (already 16-bit)\n", sourcePath)
+			fmt.Printf("Transcode not needed: Copying or Hardlinking ALAC: %s (already 16-bit)\n", sourcePath)
 			return copyFile(sourcePath, targetPath)
 		} else {
 			fmt.Printf("Converting ALAC: %s (reducing quality to 16-bit)\n", sourcePath)
@@ -398,7 +407,7 @@ func processToALAC(sourcePath, targetPath, sourceExt string, audioInfo *AudioInf
 
 	if sourceExt == ".mp3" {
 		// Never convert MP3 to ALAC - just copy the original MP3
-		fmt.Printf("Copying MP3: %s (MP3 files are not converted to lossless formats)\n", sourcePath)
+		fmt.Printf("Transcode not needed: Copying or Hardlinking MP3: %s (MP3 files are not converted to lossless formats)\n", sourcePath)
 		// Keep original extension for MP3
 		originalTargetPath := strings.TrimSuffix(targetPath, ".m4a") + ".mp3"
 		return copyFile(sourcePath, originalTargetPath)
@@ -1099,7 +1108,21 @@ func copyImageFiles() error {
 	})
 }
 
-func copyFile(src, dst string) error {
+// createHardlink attempts to create a hardlink from src to dst.
+// If dst already exists, it is removed first so that the operation
+// matches the overwrite semantics of the existing copyFile behavior.
+func createHardlink(src, dst string) error {
+	if _, err := os.Stat(dst); err == nil {
+		if err := os.Remove(dst); err != nil {
+			return fmt.Errorf("failed to remove existing destination: %w", err)
+		}
+	}
+	return osLink(src, dst)
+}
+
+// doCopyFile performs a byte-by-byte copy of src to dst,
+// preserving permissions and modification time.
+func doCopyFile(src, dst string) error {
 	sourceFile, err := os.Open(src)
 	if err != nil {
 		return err
@@ -1140,6 +1163,23 @@ func copyFile(src, dst string) error {
 	}
 
 	return nil
+}
+
+// copyFile copies the source file to the destination path.
+// If config.PreferHardlinks is true, it first attempts to create a
+// filesystem hardlink. If the hardlink cannot be created, it logs a
+// warning and falls back to a byte-by-byte copy that preserves
+// permissions and modification time.
+func copyFile(src, dst string) error {
+	if config.PreferHardlinks {
+		if err := createHardlink(src, dst); err == nil {
+			fmt.Printf("Created hardlink: %s\n", dst)
+			return nil
+		} else {
+			fmt.Printf("Warning: Could not create hardlink for %s, falling back to copy: %v\n", src, err)
+		}
+	}
+	return doCopyFile(src, dst)
 }
 
 type GitHubRelease struct {
