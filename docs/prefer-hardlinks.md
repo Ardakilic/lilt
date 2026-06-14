@@ -32,7 +32,7 @@ lilt ~/Music/MyAlbum --target-dir ~/Music/MyAlbum-16bit --prefer-hardlinks --cop
 
 If a hardlink cannot be created for any reason, Lilt automatically falls back to the normal copy behavior and prints a warning such as:
 
-```
+```text
 Warning: Could not create hardlink for /path/to/source.flac, falling back to copy: invalid cross-device link
 ```
 

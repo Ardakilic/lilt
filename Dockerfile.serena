@@ -12,9 +12,9 @@ FROM ghcr.io/oraios/serena:latest
 COPY --from=go-toolchain /usr/local/go /usr/local/go
 ENV PATH="/usr/local/go/bin:${PATH}"
 
-# Install gopls (Serena's Go language server) and add it to PATH.
-RUN go install golang.org/x/tools/gopls@latest
-ENV PATH="/root/go/bin:${PATH}"
+# Install gopls (Serena's Go language server) to a global location so it is
+# available to the non-root runtime user.
+RUN GOBIN=/usr/local/bin go install golang.org/x/tools/gopls@v0.22.0
 
 # Workaround: gopls sends benign LSP notifications such as window/showMessage
 # ("Loading packages...", "Finished loading packages.") and window/logMessage.
@@ -40,3 +40,10 @@ text = text.replace(old, new)
 with open(path, "w") as f:
     f.write(text)
 PY
+
+# Create a non-root user for runtime and ensure Serena's working directory is
+# writable so logs and config can be written at runtime. The patch step above
+# runs as root during build; this must remain the last layer.
+RUN useradd -m -s /bin/bash serena && \
+    chown -R serena:serena /workspaces/serena
+USER serena

@@ -46,11 +46,60 @@ FROM ghcr.io/oraios/serena:latest
 COPY --from=go-toolchain /usr/local/go /usr/local/go
 ENV PATH="/usr/local/go/bin:${PATH}"
 
-RUN go install golang.org/x/tools/gopls@latest
-ENV PATH="/root/go/bin:${PATH}"
+RUN GOBIN=/usr/local/bin go install golang.org/x/tools/gopls@v0.22.0
 ```
 
 This keeps the Go version aligned with the project's build image and avoids host dependencies.
+
+## Patch Version Strategy
+
+`Dockerfile.serena` applies a small Python patch to `/workspaces/serena/src/solidlsp/ls_process.py` to silence benign `window/showMessage` and `window/logMessage` notifications from `gopls`. The patch is tied to a specific Serena release.
+
+### Target Serena Version
+
+As of 2026-06-02, the patch targets the Serena image with:
+
+- Base image: `ghcr.io/oraios/serena:latest`
+- Image version label: `main`
+- Revision: `c9abd9f793b0f3ab8abb056a26011bb75e0bc5a3`
+
+### Compatibility Verification
+
+When Serena is updated, rebuild the custom image:
+
+```bash
+make serena-build
+```
+
+If the upstream `ls_process.py` changed, the build fails with:
+
+```text
+RuntimeError: Could not find solidlsp warning patch target
+```
+
+A successful build means the patch still matches the expected code.
+
+### Updating the Patch
+
+If the build fails with the patch-target error:
+
+1. Inspect the new `/workspaces/serena/src/solidlsp/ls_process.py` in the base image.
+2. Update the `old` and `new` strings in the `RUN python3 - <<'PY'` block in `Dockerfile.serena`.
+3. Rebuild the image:
+
+   ```bash
+   make serena-build
+   ```
+
+4. Validate the full stack:
+
+   ```bash
+   make serena-up
+   make serena-health
+   make serena-index
+   ```
+
+If all commands succeed, the updated patch is compatible.
 
 ## Volume Mount
 

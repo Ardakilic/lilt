@@ -92,7 +92,7 @@ Implement tasks from an OpenSpec change.
 
 **Output During Implementation**
 
-```
+```text
 ## Implementing: <change-name> (schema: <schema-name>)
 
 Working on task 3/7: <task description>
@@ -106,7 +106,7 @@ Working on task 4/7: <task description>
 
 **Output On Completion**
 
-```
+```text
 ## Implementation Complete
 
 **Change:** <change-name>
@@ -123,7 +123,7 @@ All tasks complete! Ready to archive this change.
 
 **Output On Pause (Issue Encountered)**
 
-```
+```text
 ## Implementation Paused
 
 **Change:** <change-name>

@@ -25,7 +25,7 @@
 
 - [x] 4.1 Update `docs/serena-mcp.md` port table to `10123` / `34284`.
 - [x] 4.2 Update `docs/serena-mcp.md` command table and troubleshooting examples to use `serena-down` and `:10123`.
-- [x] 4.3 Correct the outdated claim that BrewForm uses `10121/34282`.
+- [x] 4.3 Correct the outdated claim that BrewForm uses `10122/34283`.
 
 ## 5. Verify
 

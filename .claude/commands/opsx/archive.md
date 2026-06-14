@@ -11,14 +11,18 @@ Archive a completed change in the experimental workflow.
 
 **Steps**
 
-1. **If no change name provided, prompt for selection**
+1. **Resolve change name**
 
-   Run `openspec list --json` to get available changes. Use the **AskUserQuestion tool** to let the user select.
+   If a change name was provided, use it.
 
-   Show only active changes (not already archived).
-   Include the schema used for each change if available.
+   If no change name was provided:
+   - First, try to infer the change name from the conversation context.
+   - If exactly one active change can be confidently inferred, auto-select it.
+   - If inference is vague, ambiguous, or no active change can be inferred, run `openspec list --json` to get available changes and use the **AskUserQuestion tool** to let the user select.
 
-   **IMPORTANT**: Do NOT guess or auto-select a change. Always let the user choose.
+   When prompting, show only active changes (not already archived) and include the schema used for each change if available.
+
+   **IMPORTANT**: Do NOT guess or auto-select a change when inference is vague or ambiguous. Always let the user choose in that case.
 
 2. **Check artifact completion status**
 
@@ -38,7 +42,7 @@ Archive a completed change in the experimental workflow.
 
 3. **Check task completion status**
 
-   Read the tasks file (typically `tasks.md`) to check for incomplete tasks.
+   Derive the actual task artifact path from the OpenSpec metadata (for example, from `openspec status --change "<name>" --json` or `openspec instructions archive --change "<name>" --json` output, or from `contextFiles`) before reading the file and counting checkboxes.
 
    Count tasks marked with `- [ ]` (incomplete) vs `- [x]` (complete).
 
@@ -151,7 +155,7 @@ Target archive directory already exists.
 ```
 
 **Guardrails**
-- Always prompt for change selection if not provided
+- Prompt for change selection only when the change name is not provided and cannot be inferred, or when inference is ambiguous
 - Use artifact graph (openspec status --json) for completion checking
 - Don't block archive on warnings - just inform and confirm
 - Preserve .openspec.yaml when moving to archive (it moves with the directory)

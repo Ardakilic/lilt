@@ -1165,12 +1165,31 @@ func doCopyFile(src, dst string) error {
 	return nil
 }
 
+// sameFile reports whether path1 and path2 refer to the same file.
+// If either path cannot be stated, it returns false.
+func sameFile(path1, path2 string) bool {
+	info1, err := os.Stat(path1)
+	if err != nil {
+		return false
+	}
+	info2, err := os.Stat(path2)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(info1, info2)
+}
+
 // copyFile copies the source file to the destination path.
 // If config.PreferHardlinks is true, it first attempts to create a
 // filesystem hardlink. If the hardlink cannot be created, it logs a
 // warning and falls back to a byte-by-byte copy that preserves
 // permissions and modification time.
+// If src and dst refer to the same underlying file, copyFile returns
+// nil without modifying the file.
 func copyFile(src, dst string) error {
+	if sameFile(src, dst) {
+		return nil
+	}
 	if config.PreferHardlinks {
 		if err := createHardlink(src, dst); err == nil {
 			fmt.Printf("Created hardlink: %s\n", dst)
