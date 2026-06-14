@@ -38,7 +38,7 @@ However, the `Makefile` only lists the Serena targets in `help` and `.PHONY`; th
 
 4. **Custom Serena image**
    - The stock `ghcr.io/oraios/serena:latest` image does not include Go or `gopls`, which are required for Serena's Go language-server support.
-   - Create `Dockerfile.serena` as a multi-stage build that copies the Go toolchain from `golang:1.26.2-trixie` (the same image used by the project's build targets) and then installs `gopls`.
+   - Create `Dockerfile.serena` as a multi-stage build that copies the Go toolchain from `golang:1.26.4-trixie` (the same image used by the project's build targets) and then installs `gopls`.
    - Update `compose.yml` to build from `Dockerfile.serena` instead of using the stock image directly.
 
 5. **Makefile recipes**

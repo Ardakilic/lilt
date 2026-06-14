@@ -5,7 +5,7 @@
 # copies the Go toolchain from the same golang image used by the project's
 # build targets so the versions stay aligned.
 
-FROM golang:1.26.2-trixie AS go-toolchain
+FROM golang:1.26.4-trixie AS go-toolchain
 
 FROM ghcr.io/oraios/serena:latest
 

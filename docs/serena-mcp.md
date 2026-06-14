@@ -40,7 +40,7 @@ Lilt is a single-module Go CLI project. Serena's gopls integration provides:
 Lilt uses a custom Serena image (`Dockerfile.serena`) because the stock `ghcr.io/oraios/serena:latest` image does not include the Go toolchain or `gopls`, both of which are required for Serena's Go language-server support. The custom image is built automatically by Docker Compose on first run:
 
 ```dockerfile
-FROM golang:1.26.2-trixie AS go-toolchain
+FROM golang:1.26.4-trixie AS go-toolchain
 FROM ghcr.io/oraios/serena:latest
 
 COPY --from=go-toolchain /usr/local/go /usr/local/go

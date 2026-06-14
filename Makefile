@@ -88,7 +88,7 @@ help:
 	@echo "  uninstall         Uninstall"
 	@echo ""
 	@echo "Docker Build:"
-	@echo "  build-docker           Build using golang:1.26.2-trixie"
+	@echo "  build-docker           Build using golang:1.26.4-trixie"
 	@echo "  build-all-docker       Build all platforms using Docker"
 	@echo "  install-deps-docker   Download dependencies using Docker"
 	@echo "  test-docker           Run tests using Docker"
@@ -128,7 +128,7 @@ serena-health: ## Check Serena health
 # Docker Build Commands
 # ============================================
 
-GO_IMAGE=golang:1.26.2-trixie
+GO_IMAGE=golang:1.26.4-trixie
 
 build-docker:
 	docker run --rm -it -v $$(pwd):/src $(GO_IMAGE) \
