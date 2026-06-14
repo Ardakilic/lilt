@@ -50,6 +50,7 @@ var (
 // osLink is a package-level alias for os.Link to allow tests to inject failures.
 var osLink = os.Link
 
+// rootCmd is the top-level Cobra command that defines the CLI interface.
 var rootCmd = &cobra.Command{
 	Use:   "lilt <source_directory>",
 	Short: "Convert Hi-Res FLAC/ALAC files to 16-bit FLAC files",
@@ -74,6 +75,7 @@ Licensed under MIT License`,
 	Version: version,
 }
 
+// init registers all command-line flags and sets default configuration values.
 func init() {
 	rootCmd.Flags().StringVar(&config.TargetDir, "target-dir", "./transcoded", "Specify target directory")
 	rootCmd.Flags().BoolVar(&config.CopyImages, "copy-images", false, "Copy JPG and PNG files")
@@ -88,6 +90,8 @@ func init() {
 	config.SoxCommand = "sox"
 }
 
+// main is the program entry point. It executes the root Cobra command and
+// exits with a non-zero code on error.
 func main() {
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -95,6 +99,8 @@ func main() {
 	}
 }
 
+// runConverter is the main command handler. It validates arguments, sets up
+// the SoX command, processes audio files, and optionally copies image files.
 func runConverter(cmd *cobra.Command, args []string) error {
 	if selfUpdateFlag {
 		if len(args) > 0 {
@@ -148,6 +154,9 @@ func runConverter(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+// setupSoxCommand validates the availability of SoX (or Docker) and FFmpeg
+// based on the current configuration. It resolves absolute paths when using
+// Docker mode and checks for ALAC files when metadata preservation is disabled.
 func setupSoxCommand() error {
 	if config.UseDocker {
 		// Check if docker is installed
@@ -192,6 +201,8 @@ func setupSoxCommand() error {
 	return nil
 }
 
+// hasALACFiles walks the given directory and returns true if any .m4a file
+// (ALAC container) is found, stopping the walk early.
 func hasALACFiles(dir string) (bool, error) {
 	hasALAC := false
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
@@ -208,6 +219,9 @@ func hasALACFiles(dir string) (bool, error) {
 	return hasALAC, err
 }
 
+// processAudioFiles walks the source directory and processes each audio file
+// (FLAC, MP3, or ALAC) according to the current configuration, including
+// format enforcement, conversion, and metadata preservation.
 func processAudioFiles() error {
 	return filepath.Walk(config.SourceDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -298,6 +312,9 @@ func processAudioFiles() error {
 	})
 }
 
+// processAudioFileWithEnforcedFormat handles a single audio file when the
+// --enforce-output-format flag is set, routing to the appropriate target
+// format handler (FLAC, MP3, or ALAC).
 func processAudioFileWithEnforcedFormat(sourcePath, targetPath, sourceExt string) error {
 	// Get audio info for source file
 	var audioInfo *AudioInfo
@@ -332,6 +349,9 @@ func processAudioFileWithEnforcedFormat(sourcePath, targetPath, sourceExt string
 	}
 }
 
+// processToFLAC converts the source file to FLAC format according to the
+// --enforce-output-format=flac flag. MP3 sources are copied as-is since
+// transcoding lossy to lossless is not useful.
 func processToFLAC(sourcePath, targetPath, sourceExt string, audioInfo *AudioInfo) error {
 	// Change target extension to .flac
 	targetPath = changeExtensionToFlac(targetPath)
@@ -370,6 +390,8 @@ func processToFLAC(sourcePath, targetPath, sourceExt string, audioInfo *AudioInf
 	return fmt.Errorf("unsupported source format for FLAC conversion: %s", sourceExt)
 }
 
+// processToMP3 converts the source file to 320kbps MP3 according to the
+// --enforce-output-format=mp3 flag. Already-MP3 files are copied as-is.
 func processToMP3(sourcePath, targetPath, sourceExt string, audioInfo *AudioInfo) error {
 	// Change target extension to .mp3
 	targetPath = changeExtensionToMP3(targetPath)
@@ -384,6 +406,9 @@ func processToMP3(sourcePath, targetPath, sourceExt string, audioInfo *AudioInfo
 	return convertToMP3(sourcePath, targetPath, audioInfo)
 }
 
+// processToALAC converts the source file to ALAC (M4A) according to the
+// --enforce-output-format=alac flag. Already-ALAC files at 16-bit are
+// copied as-is; MP3 sources are copied without conversion.
 func processToALAC(sourcePath, targetPath, sourceExt string, audioInfo *AudioInfo) error {
 	// Change target extension to .m4a
 	targetPath = changeExtensionToM4A(targetPath)
@@ -416,6 +441,9 @@ func processToALAC(sourcePath, targetPath, sourceExt string, audioInfo *AudioInf
 	return fmt.Errorf("unsupported source format for ALAC conversion: %s", sourceExt)
 }
 
+// getAudioInfo returns audio information (bit depth, sample rate, format)
+// for the given file by dispatching to the appropriate format-specific
+// inspector (FLAC via SoX, ALAC via ffprobe).
 func getAudioInfo(filePath string) (*AudioInfo, error) {
 	ext := strings.ToLower(filepath.Ext(filePath))
 
@@ -426,6 +454,8 @@ func getAudioInfo(filePath string) (*AudioInfo, error) {
 	}
 }
 
+// getFLACInfo runs SoX's --i flag on the given FLAC file and parses the
+// output to determine the bit depth and sample rate.
 func getFLACInfo(filePath string) (*AudioInfo, error) {
 	var cmd *exec.Cmd
 
@@ -454,6 +484,8 @@ func getFLACInfo(filePath string) (*AudioInfo, error) {
 	return audioInfo, nil
 }
 
+// getALACInfo uses ffprobe to extract the sample rate and bit depth from
+// an ALAC (M4A) file, supporting both local and Docker execution modes.
 func getALACInfo(filePath string) (*AudioInfo, error) {
 	var cmd *exec.Cmd
 
@@ -481,6 +513,9 @@ func getALACInfo(filePath string) (*AudioInfo, error) {
 	return parseALACInfo(string(output))
 }
 
+// parseALACInfo parses ffprobe CSV output (sample_rate,bits_per_raw_sample)
+// and returns the audio information. It skips lines with invalid or out-of-range
+// values and only returns the first valid audio stream found.
 func parseALACInfo(info string) (*AudioInfo, error) {
 	lines := strings.Split(strings.TrimSpace(info), "\n")
 	if len(lines) == 0 {
@@ -524,21 +559,27 @@ func parseALACInfo(info string) (*AudioInfo, error) {
 	return nil, fmt.Errorf("no valid audio stream information found")
 }
 
+// changeExtensionToFlac replaces the file extension with .flac.
 func changeExtensionToFlac(filePath string) string {
 	ext := filepath.Ext(filePath)
 	return strings.TrimSuffix(filePath, ext) + ".flac"
 }
 
+// changeExtensionToMP3 replaces the file extension with .mp3.
 func changeExtensionToMP3(filePath string) string {
 	ext := filepath.Ext(filePath)
 	return strings.TrimSuffix(filePath, ext) + ".mp3"
 }
 
+// changeExtensionToM4A replaces the file extension with .m4a.
 func changeExtensionToM4A(filePath string) string {
 	ext := filepath.Ext(filePath)
 	return strings.TrimSuffix(filePath, ext) + ".m4a"
 }
 
+// convertToMP3 transcodes the source audio file to 320kbps MP3 using SoX,
+// then optionally preserves metadata via FFmpeg. The target sample rate is
+// chosen based on the source rate family (48kHz or 44.1kHz).
 func convertToMP3(sourcePath, targetPath string, audioInfo *AudioInfo) error {
 	// MP3 conversion: Use SoX to convert audio, then FFmpeg to preserve metadata
 	var tempPath string
@@ -598,6 +639,9 @@ func convertToMP3(sourcePath, targetPath string, audioInfo *AudioInfo) error {
 	return nil
 }
 
+// convertToALAC transcodes the source audio file to ALAC (M4A) via a two-step
+// process: SoX downsamples to an intermediate FLAC (if needed), then FFmpeg
+// encodes to ALAC while preserving metadata from the original file.
 func convertToALAC(sourcePath, targetPath string, audioInfo *AudioInfo) error {
 	// ALAC conversion:
 	// To preserve the best quality and metadata:
@@ -735,6 +779,8 @@ func convertToALAC(sourcePath, targetPath string, audioInfo *AudioInfo) error {
 	return nil
 }
 
+// processAudioFile dispatches to the correct processing function based on the
+// audio format (FLAC or ALAC).
 func processAudioFile(sourcePath, targetPath string, audioInfo *AudioInfo, needsConversion bool, bitrateArgs, sampleRateArgs []string) error {
 	if audioInfo.Format == "alac" {
 		return processALAC(sourcePath, targetPath, needsConversion, bitrateArgs, sampleRateArgs)
@@ -743,6 +789,9 @@ func processAudioFile(sourcePath, targetPath string, audioInfo *AudioInfo, needs
 	}
 }
 
+// processALAC converts an ALAC file to FLAC. When conversion is needed, it
+// uses a two-step process (FFmpeg for format conversion, then SoX for quality
+// adjustment). Metadata is preserved via FFmpeg when enabled.
 func processALAC(sourcePath, targetPath string, needsConversion bool, bitrateArgs, sampleRateArgs []string) error {
 	var tempPath string
 
@@ -863,6 +912,9 @@ func processALAC(sourcePath, targetPath string, needsConversion bool, bitrateArg
 	return nil
 }
 
+// parseAudioInfo parses SoX's --i output to extract the bit depth and sample
+// rate from a FLAC file. Returns an AudioInfo with zero values if parsing
+// fails silently.
 func parseAudioInfo(info string) (*AudioInfo, error) {
 	audioInfo := &AudioInfo{}
 	scanner := bufio.NewScanner(strings.NewReader(info))
@@ -889,6 +941,9 @@ func parseAudioInfo(info string) (*AudioInfo, error) {
 	return audioInfo, nil
 }
 
+// determineConversion checks whether the audio file needs bit depth or sample
+// rate conversion. It returns the required SoX arguments for both. Files at
+// 16-bit/44.1kHz or 16-bit/48kHz do not need conversion.
 func determineConversion(info *AudioInfo) (bool, []string, []string) {
 	needsConversion := false
 	var bitrateArgs []string
@@ -913,6 +968,9 @@ func determineConversion(info *AudioInfo) (bool, []string, []string) {
 	return needsConversion, bitrateArgs, sampleRateArgs
 }
 
+// processFlac transcodes a FLAC file to reduced bit depth / sample rate
+// using SoX, then optionally merges metadata from the source via FFmpeg.
+// If no conversion is needed, it copies the file directly.
 func processFlac(sourcePath, targetPath string, needsConversion bool, bitrateArgs, sampleRateArgs []string) error {
 	if !needsConversion {
 		return copyFile(sourcePath, targetPath)
@@ -981,16 +1039,23 @@ func processFlac(sourcePath, targetPath string, needsConversion bool, bitrateArg
 	return nil
 }
 
+// getDockerPath converts a host-side file path into a container-side source
+// path by computing the relative path from the source directory.
 func getDockerPath(hostPath string) string {
 	relPath := normalizeForDocker(config.SourceDir, hostPath)
 	return "/source/" + relPath
 }
 
+// getDockerTargetPath converts a host-side file path into a container-side
+// target path by computing the relative path from the target directory.
 func getDockerTargetPath(hostPath string) string {
 	relPath := normalizeForDocker(config.TargetDir, hostPath)
 	return "/target/" + relPath
 }
 
+// normalizeForDocker computes a clean relative path suitable for use inside
+// a Docker volume mount. It strips Windows drive letters and normalizes
+// backslashes to forward slashes.
 func normalizeForDocker(base, path string) string {
 	// Convert backslashes to forward slashes first
 	base = strings.ReplaceAll(base, "\\", "/")
@@ -1024,6 +1089,10 @@ func normalizeForDocker(base, path string) string {
 	}
 	return filepath.ToSlash(rel)
 }
+// mergeMetadataWithFFmpeg combines audio from the converted temp file with
+// metadata and cover art from the original source file using FFmpeg. On
+// success the temp file is removed; if NoPreserveMetadata is set it simply
+// renames the temp to the target path.
 func mergeMetadataWithFFmpeg(sourcePath, tempConvertedPath, targetPath string) error {
 	if config.NoPreserveMetadata {
 		// If not preserving metadata, just rename temp to target
@@ -1074,6 +1143,8 @@ func mergeMetadataWithFFmpeg(sourcePath, tempConvertedPath, targetPath string) e
 	return nil
 }
 
+// copyImageFiles walks the source directory and copies all JPG and PNG files
+// to the target directory, preserving the directory structure.
 func copyImageFiles() error {
 	fmt.Println("Copying image files...")
 
@@ -1201,6 +1272,8 @@ func copyFile(src, dst string) error {
 	return doCopyFile(src, dst)
 }
 
+// GitHubRelease represents a GitHub release API response, containing the
+// tag name used for version comparison in self-update.
 type GitHubRelease struct {
 	TagName string `json:"tag_name"`
 }
@@ -1238,6 +1311,9 @@ func compareVersions(v1, v2 string) int {
 	return 0
 }
 
+// selfUpdate checks the GitHub releases API for a newer version, downloads
+// the matching platform archive, extracts the binary, and replaces the
+// currently running executable with a backup fallback on failure.
 func selfUpdate(client *http.Client) error {
 	currentVersion := version
 	if currentVersion == "dev" {

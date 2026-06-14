@@ -57,7 +57,7 @@ This keeps the Go version aligned with the project's build image and avoids host
 
 ### Target Serena Version
 
-As of 2026-06-02, the patch targets the Serena image with:
+As of 2026-06-15, the patch targets the Serena image with:
 
 - Base image: `ghcr.io/oraios/serena:latest`
 - Image version label: `main`
