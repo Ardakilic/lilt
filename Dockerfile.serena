@@ -15,3 +15,28 @@ ENV PATH="/usr/local/go/bin:${PATH}"
 # Install gopls (Serena's Go language server) and add it to PATH.
 RUN go install golang.org/x/tools/gopls@latest
 ENV PATH="/root/go/bin:${PATH}"
+
+# Workaround: gopls sends benign LSP notifications such as window/showMessage
+# ("Loading packages...", "Finished loading packages.") and window/logMessage.
+# Serena's solidlsp layer does not implement handlers for these, so it logs them
+# as "Unhandled method" warnings during indexing. This patch silences only those
+# two notifications; any other unhandled method still produces a warning so we
+# don't mask real issues.
+# See: https://github.com/oraios/serena (solidlsp/ls_process.py)
+RUN python3 - <<'PY'
+path = "/workspaces/serena/src/solidlsp/ls_process.py"
+with open(path) as f:
+    text = f.read()
+old = '''        if not handler:
+            log.warning("Unhandled method '%s'", method)
+            return'''
+new = '''        if not handler:
+            if method not in ("window/showMessage", "window/logMessage"):
+                log.warning("Unhandled method '%s'", method)
+            return'''
+if old not in text:
+    raise RuntimeError("Could not find solidlsp warning patch target")
+text = text.replace(old, new)
+with open(path, "w") as f:
+    f.write(text)
+PY
