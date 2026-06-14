@@ -1,14 +1,16 @@
 services:
   # Serena MCP (semantic code retrieval for AI tools)
   serena:
-    image: ghcr.io/oraios/serena:latest
+    build:
+      context: .
+      dockerfile: Dockerfile.serena
     container_name: lilt-serena
     restart: unless-stopped
     environment:
       - SERENA_DOCKER=1
     ports:
-      - "10122:9121"   # SSE endpoint (non-standard to avoid cross-project conflicts)
-      - "34283:24282"  # Web dashboard (non-standard to avoid cross-project conflicts)
+      - "10123:9121"   # SSE endpoint (non-standard to avoid cross-project conflicts)
+      - "34284:24282"  # Web dashboard (non-standard to avoid cross-project conflicts)
     volumes:
       - .:/workspace/lilt
     command: >
@@ -18,3 +20,5 @@ services:
         --host 0.0.0.0
         --context desktop-app
         --project /workspace/lilt
+    profiles:
+      - serena

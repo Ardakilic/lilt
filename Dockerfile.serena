@@ -1,0 +1,49 @@
+# Serena MCP server image with Go toolchain for gopls support.
+#
+# The base ghcr.io/oraios/serena:latest image does not include Go, which is
+# required by Serena's gopls language-server integration. This Dockerfile
+# copies the Go toolchain from the same golang image used by the project's
+# build targets so the versions stay aligned.
+
+FROM golang:1.26.4-trixie AS go-toolchain
+
+FROM ghcr.io/oraios/serena:latest
+
+COPY --from=go-toolchain /usr/local/go /usr/local/go
+ENV PATH="/usr/local/go/bin:${PATH}"
+
+# Install gopls (Serena's Go language server) to a global location so it is
+# available to the non-root runtime user.
+RUN GOBIN=/usr/local/bin go install golang.org/x/tools/gopls@v0.22.0
+
+# Workaround: gopls sends benign LSP notifications such as window/showMessage
+# ("Loading packages...", "Finished loading packages.") and window/logMessage.
+# Serena's solidlsp layer does not implement handlers for these, so it logs them
+# as "Unhandled method" warnings during indexing. This patch silences only those
+# two notifications; any other unhandled method still produces a warning so we
+# don't mask real issues.
+# See: https://github.com/oraios/serena (solidlsp/ls_process.py)
+RUN python3 - <<'PY'
+path = "/workspaces/serena/src/solidlsp/ls_process.py"
+with open(path) as f:
+    text = f.read()
+old = '''        if not handler:
+            log.warning("Unhandled method '%s'", method)
+            return'''
+new = '''        if not handler:
+            if method not in ("window/showMessage", "window/logMessage"):
+                log.warning("Unhandled method '%s'", method)
+            return'''
+if old not in text:
+    raise RuntimeError("Could not find solidlsp warning patch target")
+text = text.replace(old, new)
+with open(path, "w") as f:
+    f.write(text)
+PY
+
+# Create a non-root user for runtime and ensure Serena's working directory is
+# writable so logs and config can be written at runtime. The patch step above
+# runs as root during build; this must remain the last layer.
+RUN useradd -m -s /bin/bash serena && \
+    chown -R serena:serena /workspaces/serena
+USER serena

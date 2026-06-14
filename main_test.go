@@ -241,6 +241,120 @@ func TestCopyFile(t *testing.T) {
 	}
 }
 
+func TestCopyFileSamePath(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "lilt-test-samepath")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	srcPath := filepath.Join(tmpDir, "source.txt")
+	content := "same path content"
+	if err := os.WriteFile(srcPath, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to create source file: %v", err)
+	}
+
+	infoBefore, err := os.Stat(srcPath)
+	if err != nil {
+		t.Fatalf("Failed to stat source file: %v", err)
+	}
+
+	for _, prefer := range []bool{true, false} {
+		t.Run(fmt.Sprintf("PreferHardlinks=%v", prefer), func(t *testing.T) {
+			old := config.PreferHardlinks
+			config.PreferHardlinks = prefer
+			defer func() { config.PreferHardlinks = old }()
+
+			if err := copyFile(srcPath, srcPath); err != nil {
+				t.Fatalf("copyFile same path returned error: %v", err)
+			}
+
+			got, err := os.ReadFile(srcPath)
+			if err != nil {
+				t.Fatalf("Failed to read source file: %v", err)
+			}
+			if string(got) != content {
+				t.Errorf("Content changed: %q", string(got))
+			}
+
+			infoAfter, err := os.Stat(srcPath)
+			if err != nil {
+				t.Fatalf("Failed to stat source file after copy: %v", err)
+			}
+			if !os.SameFile(infoBefore, infoAfter) {
+				t.Error("File inode changed after copying to itself")
+			}
+		})
+	}
+}
+
+func TestCopyFileSameInode(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "lilt-test-sameinode")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	srcPath := filepath.Join(tmpDir, "source.txt")
+	linkPath := filepath.Join(tmpDir, "link.txt")
+	content := "same inode content"
+	if err := os.WriteFile(srcPath, []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to create source file: %v", err)
+	}
+
+	if err := os.Link(srcPath, linkPath); err != nil {
+		t.Skipf("hardlinks not supported in this environment: %v", err)
+	}
+
+	srcInfo, err := os.Stat(srcPath)
+	if err != nil {
+		t.Fatalf("Failed to stat source file: %v", err)
+	}
+	linkInfo, err := os.Stat(linkPath)
+	if err != nil {
+		t.Fatalf("Failed to stat link file: %v", err)
+	}
+	if !os.SameFile(srcInfo, linkInfo) {
+		t.Fatal("setup failed: hardlinks are not the same file")
+	}
+
+	for _, prefer := range []bool{true, false} {
+		t.Run(fmt.Sprintf("PreferHardlinks=%v", prefer), func(t *testing.T) {
+			old := config.PreferHardlinks
+			config.PreferHardlinks = prefer
+			defer func() { config.PreferHardlinks = old }()
+
+			if err := copyFile(srcPath, linkPath); err != nil {
+				t.Fatalf("copyFile same inode returned error: %v", err)
+			}
+
+			got, err := os.ReadFile(srcPath)
+			if err != nil {
+				t.Fatalf("Failed to read source file: %v", err)
+			}
+			if string(got) != content {
+				t.Errorf("Source content changed: %q", string(got))
+			}
+
+			gotLink, err := os.ReadFile(linkPath)
+			if err != nil {
+				t.Fatalf("Failed to read link file: %v", err)
+			}
+			if string(gotLink) != content {
+				t.Errorf("Link content changed: %q", string(gotLink))
+			}
+
+			infoAfter, err := os.Stat(linkPath)
+			if err != nil {
+				t.Fatalf("Failed to stat link file after copy: %v", err)
+			}
+			if !os.SameFile(srcInfo, infoAfter) {
+				t.Error("Same inode was overwritten or removed")
+			}
+		})
+	}
+}
+
 func TestCompareVersions(t *testing.T) {
 	testCases := []struct {
 		name     string
@@ -6039,4 +6153,224 @@ func TestProcessAudioFilesWithEnforce(t *testing.T) {
 			t.Logf("processAudioFiles with enforce ALAC: %v", err)
 		}
 	})
+}
+
+// TestCopyFileHardlinkSuccess verifies that copyFile creates a hardlink when
+// config.PreferHardlinks is enabled and the filesystem supports it.
+func TestCopyFileHardlinkSuccess(t *testing.T) {
+	tmpDir := t.TempDir()
+	src := filepath.Join(tmpDir, "src.txt")
+	dst := filepath.Join(tmpDir, "dst.txt")
+
+	if err := os.WriteFile(src, []byte("hello"), 0644); err != nil {
+		t.Fatalf("Failed to create source file: %v", err)
+	}
+
+	originalConfig := config
+	config.PreferHardlinks = true
+	defer func() { config = originalConfig }()
+
+	if err := copyFile(src, dst); err != nil {
+		t.Fatalf("copyFile failed: %v", err)
+	}
+
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		t.Fatalf("Failed to stat source file: %v", err)
+	}
+
+	dstInfo, err := os.Stat(dst)
+	if err != nil {
+		t.Fatalf("Failed to stat destination file: %v", err)
+	}
+
+	if !os.SameFile(srcInfo, dstInfo) {
+		t.Errorf("Expected dst to be a hardlink to src")
+	}
+}
+
+// TestCopyFileHardlinkFallback verifies that copyFile falls back to a byte-by-byte
+// copy when the hardlink creation fails and emits a warning message.
+func TestCopyFileHardlinkFallback(t *testing.T) {
+	originalLink := osLink
+	osLink = func(_, _ string) error { return errors.New("mock hardlink failure") }
+	defer func() { osLink = originalLink }()
+
+	tmpDir := t.TempDir()
+	src := filepath.Join(tmpDir, "src.txt")
+	dst := filepath.Join(tmpDir, "dst.txt")
+
+	if err := os.WriteFile(src, []byte("hello"), 0644); err != nil {
+		t.Fatalf("Failed to create source file: %v", err)
+	}
+
+	originalConfig := config
+	config.PreferHardlinks = true
+	defer func() { config = originalConfig }()
+
+	output, err := captureOutput(func() {
+		if err := copyFile(src, dst); err != nil {
+			t.Fatalf("copyFile failed: %v", err)
+		}
+	})
+	if err != nil {
+		t.Fatalf("captureOutput failed: %v", err)
+	}
+
+	content, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("Failed to read destination file: %v", err)
+	}
+
+	if string(content) != "hello" {
+		t.Errorf("Fallback copy did not copy content: got %q", string(content))
+	}
+
+	if !strings.Contains(output, "falling back to copy") {
+		t.Errorf("Expected fallback warning, got: %q", output)
+	}
+}
+
+// TestCopyFileHardlinkOverwrite verifies that copyFile replaces an existing
+// destination file with a hardlink when PreferHardlinks is enabled.
+func TestCopyFileHardlinkOverwrite(t *testing.T) {
+	tmpDir := t.TempDir()
+	src := filepath.Join(tmpDir, "src.txt")
+	dst := filepath.Join(tmpDir, "dst.txt")
+
+	if err := os.WriteFile(src, []byte("source content"), 0644); err != nil {
+		t.Fatalf("Failed to create source file: %v", err)
+	}
+	if err := os.WriteFile(dst, []byte("existing content"), 0644); err != nil {
+		t.Fatalf("Failed to create destination file: %v", err)
+	}
+
+	originalConfig := config
+	config.PreferHardlinks = true
+	defer func() { config = originalConfig }()
+
+	if err := copyFile(src, dst); err != nil {
+		t.Fatalf("copyFile failed: %v", err)
+	}
+
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		t.Fatalf("Failed to stat source file: %v", err)
+	}
+
+	dstInfo, err := os.Stat(dst)
+	if err != nil {
+		t.Fatalf("Failed to stat destination file: %v", err)
+	}
+
+	if !os.SameFile(srcInfo, dstInfo) {
+		t.Errorf("Expected dst to be a hardlink to src after overwrite")
+	}
+
+	content, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("Failed to read destination file: %v", err)
+	}
+
+	if string(content) != "source content" {
+		t.Errorf("Expected destination content to match source, got %q", string(content))
+	}
+}
+
+// TestCreateHardlink covers the createHardlink helper directly.
+func TestCreateHardlink(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	t.Run("Success", func(t *testing.T) {
+		src := filepath.Join(tmpDir, "src_success.txt")
+		dst := filepath.Join(tmpDir, "dst_success.txt")
+
+		if err := os.WriteFile(src, []byte("hello"), 0644); err != nil {
+			t.Fatalf("Failed to create source file: %v", err)
+		}
+
+		if err := createHardlink(src, dst); err != nil {
+			t.Fatalf("createHardlink failed: %v", err)
+		}
+
+		srcInfo, _ := os.Stat(src)
+		dstInfo, _ := os.Stat(dst)
+		if !os.SameFile(srcInfo, dstInfo) {
+			t.Errorf("Expected hardlink to be created")
+		}
+	})
+
+	t.Run("Overwrite", func(t *testing.T) {
+		src := filepath.Join(tmpDir, "src_overwrite.txt")
+		dst := filepath.Join(tmpDir, "dst_overwrite.txt")
+
+		if err := os.WriteFile(src, []byte("source content"), 0644); err != nil {
+			t.Fatalf("Failed to create source file: %v", err)
+		}
+		if err := os.WriteFile(dst, []byte("existing content"), 0644); err != nil {
+			t.Fatalf("Failed to create destination file: %v", err)
+		}
+
+		if err := createHardlink(src, dst); err != nil {
+			t.Fatalf("createHardlink failed: %v", err)
+		}
+
+		srcInfo, _ := os.Stat(src)
+		dstInfo, _ := os.Stat(dst)
+		if !os.SameFile(srcInfo, dstInfo) {
+			t.Errorf("Expected existing destination to be replaced by hardlink")
+		}
+	})
+
+	t.Run("Failure", func(t *testing.T) {
+		src := filepath.Join(tmpDir, "nonexistent.txt")
+		dst := filepath.Join(tmpDir, "dst_failure.txt")
+
+		if err := createHardlink(src, dst); err == nil {
+			t.Error("Expected error when source does not exist")
+		}
+	})
+}
+
+// TestCopyFileWithoutHardlinks verifies that copyFile performs a normal
+// independent copy when config.PreferHardlinks is false.
+func TestCopyFileWithoutHardlinks(t *testing.T) {
+	tmpDir := t.TempDir()
+	src := filepath.Join(tmpDir, "src.txt")
+	dst := filepath.Join(tmpDir, "dst.txt")
+
+	if err := os.WriteFile(src, []byte("hello"), 0644); err != nil {
+		t.Fatalf("Failed to create source file: %v", err)
+	}
+
+	originalConfig := config
+	config.PreferHardlinks = false
+	defer func() { config = originalConfig }()
+
+	if err := copyFile(src, dst); err != nil {
+		t.Fatalf("copyFile failed: %v", err)
+	}
+
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		t.Fatalf("Failed to stat source file: %v", err)
+	}
+
+	dstInfo, err := os.Stat(dst)
+	if err != nil {
+		t.Fatalf("Failed to stat destination file: %v", err)
+	}
+
+	if os.SameFile(srcInfo, dstInfo) {
+		t.Errorf("Expected dst to be an independent copy, not a hardlink")
+	}
+
+	content, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("Failed to read destination file: %v", err)
+	}
+
+	if string(content) != "hello" {
+		t.Errorf("Expected destination content to match source, got %q", string(content))
+	}
 }

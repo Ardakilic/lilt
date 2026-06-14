@@ -26,14 +26,80 @@ Lilt is a single-module Go CLI project. Serena's gopls integration provides:
 ┌─────────────┐     ┌─────────────────┐     ┌─────────────┐
 │  AI Client  │────▶│  Serena Docker  │────▶│    gopls   │
 │ (OpenCode, │     │   Container     │     │  Language  │
-│ Claude,    │◀────│  (port 10122)   │◀────│  Server    │
+│ Claude,    │◀────│  (port 10123)   │◀────│  Server    │
 │  Cursor)   │     │                 │     │            │
 └─────────────┘     └─────────────────┘     └─────────────┘
 ```
 
-- **Host**: AI client connects to `localhost:10122`
+- **Host**: AI client connects to `localhost:10123`
 - **Container**: Serena MCP server runs in Docker (port 9121 internal)
 - **gopls**: Go language server indexes the mounted workspace
+
+## Docker Image
+
+Lilt uses a custom Serena image (`Dockerfile.serena`) because the stock `ghcr.io/oraios/serena:latest` image does not include the Go toolchain or `gopls`, both of which are required for Serena's Go language-server support. The custom image is built automatically by Docker Compose on first run:
+
+```dockerfile
+FROM golang:1.26.4-trixie AS go-toolchain
+FROM ghcr.io/oraios/serena:latest
+
+COPY --from=go-toolchain /usr/local/go /usr/local/go
+ENV PATH="/usr/local/go/bin:${PATH}"
+
+RUN GOBIN=/usr/local/bin go install golang.org/x/tools/gopls@v0.22.0
+```
+
+This keeps the Go version aligned with the project's build image and avoids host dependencies.
+
+## Patch Version Strategy
+
+`Dockerfile.serena` applies a small Python patch to `/workspaces/serena/src/solidlsp/ls_process.py` to silence benign `window/showMessage` and `window/logMessage` notifications from `gopls`. The patch is tied to a specific Serena release.
+
+### Target Serena Version
+
+As of 2026-06-15, the patch targets the Serena image with:
+
+- Base image: `ghcr.io/oraios/serena:latest`
+- Image version label: `main`
+- Revision: `c9abd9f793b0f3ab8abb056a26011bb75e0bc5a3`
+
+### Compatibility Verification
+
+When Serena is updated, rebuild the custom image:
+
+```bash
+make serena-build
+```
+
+If the upstream `ls_process.py` changed, the build fails with:
+
+```text
+RuntimeError: Could not find solidlsp warning patch target
+```
+
+A successful build means the patch still matches the expected code.
+
+### Updating the Patch
+
+If the build fails with the patch-target error:
+
+1. Inspect the new `/workspaces/serena/src/solidlsp/ls_process.py` in the base image.
+2. Update the `old` and `new` strings in the `RUN python3 - <<'PY'` block in `Dockerfile.serena`.
+3. Rebuild the image:
+
+   ```bash
+   make serena-build
+   ```
+
+4. Validate the full stack:
+
+   ```bash
+   make serena-up
+   make serena-health
+   make serena-index
+   ```
+
+If all commands succeed, the updated patch is compatible.
 
 ## Volume Mount
 
@@ -69,12 +135,12 @@ serena start-mcp-server \
 
 | Endpoint | Container Port | Host Port | Purpose |
 |----------|-----------------|-----------|----------|
-| SSE | 9121 | 10122 | MCP client connections |
-| Dashboard | 24282 | 34283 | Serena web UI for inspection |
+| SSE | 9121 | 10123 | MCP client connections |
+| Dashboard | 24282 | 34284 | Serena web UI for inspection |
 
-Non-standard ports are used to avoid conflicts with other projects (e.g., BrewForm uses 10121/34282).
+Non-standard ports are used to avoid conflicts with other projects (e.g., BrewForm uses 10122/34283).
 
-Access the dashboard at http://localhost:34283
+Access the dashboard at http://localhost:34284
 
 ## What Is Ignored and Why
 
@@ -144,7 +210,7 @@ Most projects don't need these customizations.
   "mcp": {
     "serena": {
       "type": "remote",
-      "url": "http://localhost:10122/sse",
+      "url": "http://localhost:10123/sse",
       "enabled": true
     }
   }
@@ -154,7 +220,7 @@ Most projects don't need these customizations.
 ### Claude Code
 
 ```bash
-claude mcp add serena --transport sse --url http://localhost:10122/sse
+claude mcp add serena --transport sse --url http://localhost:10123/sse
 ```
 
 ### VS Code / Cursor / Windsurf
@@ -166,7 +232,7 @@ Create `.vscode/mcp.json`:
   "mcpServers": {
     "serena": {
       "type": "sse",
-      "url": "http://localhost:10122/sse"
+      "url": "http://localhost:10123/sse"
     }
   }
 }
@@ -177,7 +243,8 @@ Create `.vscode/mcp.json`:
 | Command | Description |
 |---------|-------------|
 | `make serena-up` | Start Serena MCP service |
-| `make serena-stop` | Stop Serena MCP service |
+| `make serena-down` | Stop Serena MCP service |
+| `make serena-build` | Build/rebuild Serena Docker image |
 | `make serena-logs` | View Serena logs |
 | `make serena-index` | Index the project workspace |
 | `make serena-health` | Health check the project workspace |
@@ -190,7 +257,7 @@ If clients report "project not found", ensure the container is running and the p
 
 ```bash
 make serena-up
-docker compose exec serena serena project index /workspace/lilt
+docker compose --profile serena exec serena serena project index /workspace/lilt
 ```
 
 ### Slow Start
@@ -213,8 +280,8 @@ make serena-index
 
 ### Dashboard Unreachable
 
-Ensure the dashboard port (34283) is not in use by another application:
+Ensure the dashboard port (34284) is not in use by another application:
 
 ```bash
-lsof -i :34283
+lsof -i :34284
 ```

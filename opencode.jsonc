@@ -3,7 +3,7 @@
   "mcp": {
     "serena": {
       "type": "remote",
-      "url": "http://localhost:10122/sse",
+      "url": "http://localhost:10123/sse",
       "enabled": true
     }
   }

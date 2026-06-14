@@ -2,7 +2,7 @@
   "mcpServers": {
     "serena": {
       "type": "sse",
-      "url": "http://localhost:10122/sse"
+      "url": "http://localhost:10123/sse"
     }
   }
 }
