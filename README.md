@@ -1,3 +1,5 @@
+
+
 # Lilt
 
 ![Lilt Logo](assets/logo.svg)
@@ -209,7 +211,7 @@ make serena-up
 
 | Service | Port |
 |---------|------|
-| SSE (MCP endpoint) | 10122 |
+| SSE (MCP endpoint) | 10123 |
 | Dashboard | 34283 |
 
 Access the Serena dashboard at http://localhost:34283
@@ -220,7 +222,7 @@ Access the Serena dashboard at http://localhost:34283
 
 **Claude Code:**
 ```bash
-claude mcp add serena --transport sse --url http://localhost:10122/sse
+claude mcp add serena --transport sse --url http://localhost:10123/sse
 ```
 
 **VS Code / Cursor / Windsurf:**
@@ -231,7 +233,7 @@ Create `.vscode/mcp.json`:
   "mcpServers": {
     "serena": {
       "type": "sse",
-      "url": "http://localhost:10122/sse"
+      "url": "http://localhost:10123/sse"
     }
   }
 }
@@ -378,4 +380,3 @@ Arda Kilicdagi
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
-
