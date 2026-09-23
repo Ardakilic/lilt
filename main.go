@@ -26,6 +26,7 @@ type Config struct {
 	SourceDir           string
 	TargetDir           string
 	CopyImages          bool
+	EmbedCopiedImage    bool // Embed conventionally named sidecar artwork in final audio outputs
 	UseDocker           bool
 	DockerImage         string
 	SoxCommand          string
@@ -59,6 +60,8 @@ var rootCmd = &cobra.Command{
 This tool converts Hi-Res FLAC and ALAC files to 16-bit FLAC files with a sample rate of 44.1kHz or 48kHz.
 It also copies MP3 files and image files (JPG, PNG) to the target directory.
 
+With --embed-copied-image, conventionally named sidecar artwork beside each source audio file is embedded into its final output. The lookup order is cover.jpg, cover.png, front.jpg, front.png, folder.jpg, and folder.png; matching is case-insensitive and limited to the same directory. The selected sidecar replaces existing embedded artwork. This flag is independent from --copy-images.
+
 With the --enforce-output-format flag, you can convert all audio files to a specific format:
 - flac: Convert all files to 16-bit FLAC
 - mp3: Convert all files to 320kbps MP3
@@ -79,6 +82,7 @@ Licensed under MIT License`,
 func init() {
 	rootCmd.Flags().StringVar(&config.TargetDir, "target-dir", "./transcoded", "Specify target directory")
 	rootCmd.Flags().BoolVar(&config.CopyImages, "copy-images", false, "Copy JPG and PNG files")
+	rootCmd.Flags().BoolVar(&config.EmbedCopiedImage, "embed-copied-image", false, "Embed conventionally named JPG/PNG sidecar artwork into final audio outputs")
 	rootCmd.Flags().BoolVar(&config.UseDocker, "use-docker", false, "Use Docker to run Sox instead of local installation")
 	rootCmd.Flags().StringVar(&config.DockerImage, "docker-image", "ardakilic/sox_ng:latest", "Specify Docker image")
 	rootCmd.Flags().BoolVar(&config.NoPreserveMetadata, "no-preserve-metadata", false, "Do not preserve ID3 tags and cover art using FFmpeg (metadata is preserved by default)")
@@ -139,8 +143,14 @@ func runConverter(cmd *cobra.Command, args []string) error {
 	}
 
 	// Process audio files
-	if err := processAudioFiles(); err != nil {
+	outputs, err := processAudioFilesWithOutputs()
+	if err != nil {
 		return err
+	}
+
+	// Embed conventionally named sidecar artwork if requested
+	if config.EmbedCopiedImage {
+		embedAudioOutputs(outputs)
 	}
 
 	// Copy image files if requested
@@ -158,9 +168,16 @@ func runConverter(cmd *cobra.Command, args []string) error {
 // based on the current configuration. It resolves absolute paths when using
 // Docker mode and checks for ALAC files when metadata preservation is disabled.
 func setupSoxCommand() error {
+	return setupSoxCommandWithLookPath(exec.LookPath)
+}
+
+// setupSoxCommandWithLookPath performs dependency setup with an injectable
+// executable lookup function. The production entry point uses exec.LookPath;
+// tests use this seam to verify feature-specific dependencies deterministically.
+func setupSoxCommandWithLookPath(lookPath func(string) (string, error)) error {
 	if config.UseDocker {
 		// Check if docker is installed
-		if _, err := exec.LookPath("docker"); err != nil {
+		if _, err := lookPath("docker"); err != nil {
 			return fmt.Errorf("docker is not installed. Please install Docker to use this option")
 		}
 
@@ -179,22 +196,22 @@ func setupSoxCommand() error {
 		config.TargetDir = targetAbs
 	} else {
 		// Check if sox is installed locally
-		if _, err := exec.LookPath(config.SoxCommand); err != nil {
+		if _, err := lookPath(config.SoxCommand); err != nil {
 			return fmt.Errorf("sox is not installed. Please install sox or use --use-docker option")
 		}
 
-		// Check for FFmpeg only when needed
-		needsFFmpeg := !config.NoPreserveMetadata
+		// Check for FFmpeg only when metadata preservation or sidecar embedding needs it
+		needsFFmpeg := !config.NoPreserveMetadata || config.EmbedCopiedImage
 
-		// Quick check if directory contains ALAC files (if metadata preservation is disabled)
+		// Quick check if directory contains ALAC files (if metadata preservation and embedding are disabled)
 		if !needsFFmpeg {
 			hasALAC, _ := hasALACFiles(config.SourceDir)
 			needsFFmpeg = hasALAC
 		}
 
 		if needsFFmpeg {
-			if _, err := exec.LookPath("ffmpeg"); err != nil {
-				return fmt.Errorf("ffmpeg is not installed. Please install FFmpeg for ALAC support and metadata preservation, or use --use-docker option")
+			if _, err := lookPath("ffmpeg"); err != nil {
+				return fmt.Errorf("ffmpeg is not installed. Please install FFmpeg for ALAC support, metadata preservation, or sidecar embedding, or use --use-docker option")
 			}
 		}
 	}
@@ -219,11 +236,27 @@ func hasALACFiles(dir string) (bool, error) {
 	return hasALAC, err
 }
 
-// processAudioFiles walks the source directory and processes each audio file
-// (FLAC, MP3, or ALAC) according to the current configuration, including
-// format enforcement, conversion, and metadata preservation.
+// audioOutput records the source audio file and the actual final target
+// produced for it during the current processing run.
+type audioOutput struct {
+	sourcePath string
+	targetPath string
+}
+
+// processAudioFiles processes audio files while preserving the original
+// error-only API used by existing callers.
 func processAudioFiles() error {
-	return filepath.Walk(config.SourceDir, func(path string, info os.FileInfo, err error) error {
+	_, err := processAudioFilesWithOutputs()
+	return err
+}
+
+// processAudioFilesWithOutputs walks the source directory, processes each
+// supported audio file, and returns the source-to-final-output inventory for
+// the current run. Only files successfully copied or converted are recorded.
+func processAudioFilesWithOutputs() ([]audioOutput, error) {
+	outputs := []audioOutput{}
+
+	err := filepath.Walk(config.SourceDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -254,21 +287,33 @@ func processAudioFiles() error {
 
 		// Handle enforce-output-format mode
 		if config.EnforceOutputFormat != "" {
-			return processAudioFileWithEnforcedFormat(path, targetPath, ext)
+			finalTargetPath, err := processAudioFileWithEnforcedFormatWithOutput(path, targetPath, ext)
+			if err != nil {
+				return err
+			}
+			outputs = append(outputs, audioOutput{sourcePath: path, targetPath: finalTargetPath})
+			return nil
 		}
 
-		// Original processing logic when no format enforcement
 		// Handle MP3 files - just copy them
 		if ext == ".mp3" {
 			fmt.Printf("Transcode not needed: Copying or Hardlinking MP3 file: %s\n", path)
-			return copyFile(path, targetPath)
+			if err := copyFile(path, targetPath); err != nil {
+				return err
+			}
+			outputs = append(outputs, audioOutput{sourcePath: path, targetPath: targetPath})
+			return nil
 		}
 
 		// Process FLAC and ALAC files
 		audioInfo, err := getAudioInfo(path)
 		if err != nil {
 			fmt.Printf("Warning: Could not get audio info for %s, copying original\n", path)
-			return copyFile(path, targetPath)
+			if err := copyFile(path, targetPath); err != nil {
+				return err
+			}
+			outputs = append(outputs, audioOutput{sourcePath: path, targetPath: targetPath})
+			return nil
 		}
 
 		fmt.Printf("Detected: %d bits, %d Hz, %s format\n", audioInfo.Bits, audioInfo.Rate, audioInfo.Format)
@@ -276,6 +321,7 @@ func processAudioFiles() error {
 		needsConversion, bitrateArgs, sampleRateArgs := determineConversion(audioInfo)
 
 		if needsConversion || audioInfo.Format == "alac" {
+			sourceTargetPath := targetPath
 			// Determine target sample rate for display based on source rate
 			var targetRate string
 			switch audioInfo.Rate {
@@ -294,28 +340,72 @@ func processAudioFiles() error {
 					fmt.Printf("Converting ALAC to FLAC: %s (maintaining %d-bit %d Hz)\n", path, audioInfo.Bits, audioInfo.Rate)
 				}
 				// Always convert ALAC to FLAC, even if bit depth and sample rate are acceptable
-				targetPath = changeExtensionToFlac(targetPath)
+				targetPath = defaultConversionTargetPath(targetPath, audioInfo.Format)
 			} else {
 				fmt.Printf("Converting FLAC: %s (%d-bit %d Hz → 16-bit %s)\n", path, audioInfo.Bits, audioInfo.Rate, targetRate)
 			}
 
 			if err := processAudioFile(path, targetPath, audioInfo, needsConversion, bitrateArgs, sampleRateArgs); err != nil {
 				fmt.Printf("Error: Audio conversion failed. Copying original file instead. Error: %v\n", err)
-				return copyFile(path, targetPath)
+				fallbackTargetPath := defaultFallbackTargetPath(targetPath, sourceTargetPath, audioInfo.Format)
+				if err := copyFile(path, fallbackTargetPath); err != nil {
+					return err
+				}
+				outputs = append(outputs, audioOutput{sourcePath: path, targetPath: fallbackTargetPath})
+				return nil
 			}
 		} else {
 			fmt.Printf("Transcode not needed: Copying or Hardlinking FLAC: %s\n", path)
-			return copyFile(path, targetPath)
+			if err := copyFile(path, targetPath); err != nil {
+				return err
+			}
+			outputs = append(outputs, audioOutput{sourcePath: path, targetPath: targetPath})
+			return nil
 		}
 
+		outputs = append(outputs, audioOutput{sourcePath: path, targetPath: targetPath})
 		return nil
 	})
+
+	if err != nil {
+		return nil, err
+	}
+	return outputs, nil
+}
+
+// defaultConversionTargetPath returns the actual default-mode output path for
+// a source that requires conversion. ALAC is always written as FLAC, while
+// FLAC keeps its target extension.
+func defaultConversionTargetPath(targetPath, audioFormat string) string {
+	if audioFormat == "alac" {
+		return changeExtensionToFlac(targetPath)
+	}
+	return targetPath
+}
+
+// defaultFallbackTargetPath returns a source-compatible fallback path when a
+// conversion fails. ALAC must retain its M4A extension instead of being copied
+// under the attempted FLAC target name.
+func defaultFallbackTargetPath(convertedTargetPath, sourceTargetPath, audioFormat string) string {
+	if audioFormat == "alac" {
+		return sourceTargetPath
+	}
+	return convertedTargetPath
 }
 
 // processAudioFileWithEnforcedFormat handles a single audio file when the
 // --enforce-output-format flag is set, routing to the appropriate target
 // format handler (FLAC, MP3, or ALAC).
 func processAudioFileWithEnforcedFormat(sourcePath, targetPath, sourceExt string) error {
+	_, err := processAudioFileWithEnforcedFormatWithOutput(sourcePath, targetPath, sourceExt)
+	return err
+}
+
+// processAudioFileWithEnforcedFormatWithOutput processes one audio file in
+// format-enforcement mode and returns the actual final target path. The
+// target path may retain the source extension for MP3 exceptions or failed
+// audio-info inspection.
+func processAudioFileWithEnforcedFormatWithOutput(sourcePath, targetPath, sourceExt string) (string, error) {
 	// Get audio info for source file
 	var audioInfo *AudioInfo
 	var err error
@@ -323,7 +413,10 @@ func processAudioFileWithEnforcedFormat(sourcePath, targetPath, sourceExt string
 	// Skip MP3 files if they don't need processing
 	if sourceExt == ".mp3" && config.EnforceOutputFormat == "mp3" {
 		fmt.Printf("Transcode not needed: Copying or Hardlinking MP3 file: %s (already in target format)\n", sourcePath)
-		return copyFile(sourcePath, targetPath)
+		if err := copyFile(sourcePath, targetPath); err != nil {
+			return "", err
+		}
+		return targetPath, nil
 	}
 
 	// Get audio info for FLAC and ALAC files
@@ -331,7 +424,10 @@ func processAudioFileWithEnforcedFormat(sourcePath, targetPath, sourceExt string
 		audioInfo, err = getAudioInfo(sourcePath)
 		if err != nil {
 			fmt.Printf("Warning: Could not get audio info for %s, copying original\n", sourcePath)
-			return copyFile(sourcePath, targetPath)
+			if copyErr := copyFile(sourcePath, targetPath); copyErr != nil {
+				return "", copyErr
+			}
+			return targetPath, nil
 		}
 		fmt.Printf("Detected: %d bits, %d Hz, %s format\n", audioInfo.Bits, audioInfo.Rate, audioInfo.Format)
 	}
@@ -339,14 +435,38 @@ func processAudioFileWithEnforcedFormat(sourcePath, targetPath, sourceExt string
 	// Determine target file extension and process accordingly
 	switch config.EnforceOutputFormat {
 	case "flac":
-		return processToFLAC(sourcePath, targetPath, sourceExt, audioInfo)
+		if err := processToFLAC(sourcePath, targetPath, sourceExt, audioInfo); err != nil {
+			return "", err
+		}
+		return enforcedOutputPath(targetPath, sourceExt, "flac"), nil
 	case "mp3":
-		return processToMP3(sourcePath, targetPath, sourceExt, audioInfo)
+		if err := processToMP3(sourcePath, targetPath, sourceExt, audioInfo); err != nil {
+			return "", err
+		}
+		return changeExtensionToMP3(targetPath), nil
 	case "alac":
-		return processToALAC(sourcePath, targetPath, sourceExt, audioInfo)
+		if err := processToALAC(sourcePath, targetPath, sourceExt, audioInfo); err != nil {
+			return "", err
+		}
+		return enforcedOutputPath(targetPath, sourceExt, "alac"), nil
 	default:
-		return fmt.Errorf("unsupported enforce-output-format: %s", config.EnforceOutputFormat)
+		return "", fmt.Errorf("unsupported enforce-output-format: %s", config.EnforceOutputFormat)
 	}
+}
+
+// enforcedOutputPath returns the path selected by the format-enforcement
+// helpers, including the intentional MP3 exception for FLAC and ALAC modes.
+func enforcedOutputPath(targetPath, sourceExt, enforcedFormat string) string {
+	if strings.EqualFold(sourceExt, ".mp3") {
+		return changeExtensionToMP3(targetPath)
+	}
+	if enforcedFormat == "flac" {
+		return changeExtensionToFlac(targetPath)
+	}
+	if enforcedFormat == "mp3" {
+		return changeExtensionToMP3(targetPath)
+	}
+	return changeExtensionToM4A(targetPath)
 }
 
 // processToFLAC converts the source file to FLAC format according to the
@@ -1089,6 +1209,7 @@ func normalizeForDocker(base, path string) string {
 	}
 	return filepath.ToSlash(rel)
 }
+
 // mergeMetadataWithFFmpeg combines audio from the converted temp file with
 // metadata and cover art from the original source file using FFmpeg. On
 // success the temp file is removed; if NoPreserveMetadata is set it simply

@@ -12,6 +12,8 @@ When `--prefer-hardlinks` is enabled, Lilt attempts to hardlink the following fi
 - JPG and PNG image files (when `--copy-images` is also enabled)
 - Fallback copies after conversion or metadata-read failures
 
+Audio outputs that successfully receive embedded sidecar artwork are intentionally replaced with independent files after the initial copy, so they no longer share the source inode. Standalone JPG/PNG files copied with `--copy-images` may still be hardlinks.
+
 ## Why use it
 
 If your source and target directories are on the same filesystem, hardlinks let you keep two directory trees without duplicating the underlying file data. This can save a large amount of disk space for big music libraries.
@@ -48,6 +50,10 @@ Common reasons for hardlink failure include:
 ### Shared inode data
 
 Because hardlinks share the same inode, modifying the source file after conversion also modifies the target file, and vice versa. If you need independent copies, do not use this flag.
+
+### Sidecar embedding exception
+
+When `--embed-copied-image` is enabled, Lilt writes the remuxed audio to a temporary file and replaces the initial audio target only after FFmpeg succeeds. This prevents an in-place FFmpeg write from modifying a hardlinked source. A failed embedding attempt leaves the original hardlink intact; a successful attempt breaks the audio hardlink so the new artwork cannot modify the source.
 
 ### Overwrite semantics
 

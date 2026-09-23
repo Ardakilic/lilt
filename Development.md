@@ -299,9 +299,9 @@ Added comprehensive support for Apple Lossless Audio Codec (ALAC) files:
 - Added comprehensive unit tests for ALAC functionality
 
 **Dependencies:**
-- FFmpeg is now required for ALAC support and metadata preservation
-- FFmpeg dependency is automatically detected when ALAC files are present
-- Maintains backward compatibility - projects with only FLAC files still work with SoX alone
+- FFmpeg is now required for ALAC support, metadata preservation, and `--embed-copied-image`
+- FFmpeg dependency is automatically detected when ALAC files or sidecar embedding require it
+- Maintains backward compatibility - projects with only FLAC files and no sidecar embedding still work with SoX alone
 
 ### Format Enforcement Feature
 
@@ -338,26 +338,29 @@ Added `--enforce-output-format` flag for converting all audio files to a specifi
 - Updated error messages to reflect FFmpeg requirement
 - Docker image already includes FFmpeg support
 
-### Cover Art Preservation Fix
+### Cover Art Preservation and Sidecar Embedding
 
-Previously, when ID tags were copied using FFmpeg, cover images (album artwork) were not copied to the converted file. This has been fixed by adding video stream mapping to the FFmpeg command.
+Lilt preserves artwork already embedded in source audio with FFmpeg video-stream mapping. The optional `--embed-copied-image` flag adds a separate post-processing pass for conventionally named JPG/PNG files beside each source audio file.
 
-**Technical Details:**
-- Added `-map 0:v?` parameter to copy video streams (cover art) from source file
-- The `?` makes it optional, so the command won't fail if there are no video streams
-- Cover art in FLAC files is stored as video streams, which is why this mapping was necessary
+**Sidecar lookup:**
 
-**FFmpeg Command Before:**
-```bash
-ffmpeg -i source.flac -i converted.flac -map 1 -map_metadata 0 -c copy output.flac
-```
+- Searches only the source audio file's containing directory
+- Uses case-insensitive precedence: `cover.jpg`, `cover.png`, `front.jpg`, `front.png`, `folder.jpg`, `folder.png`
+- Selects one image; the selected sidecar replaces existing embedded artwork
+- Resolves artwork relative to the source file, while remuxing the actual final target path
+- Is independent from `--copy-images`
 
-**FFmpeg Command After:**
-```bash
-ffmpeg -i source.flac -i converted.flac -map 1 -map 0:v? -map_metadata 0 -c copy output.flac
-```
+**Embedding implementation:**
 
-This fix applies to both local FFmpeg execution and Docker-based execution.
+- Maps only the final target audio stream and selected sidecar image
+- Does not map the final target's existing video/picture streams
+- Copies audio without re-encoding
+- Writes to a same-directory temporary file and replaces the final target only after FFmpeg succeeds
+- Removes temporary files and preserves the valid audio target on failure
+- Breaks an audio hardlink only after successful embedding; standalone copied sidecars may remain hardlinks
+- Requires FFmpeg in local mode even with `--no-preserve-metadata`; Docker mode uses the image's FFmpeg binary
+
+The source-artwork preservation path still uses `-map 0:v?` during conversion. The sidecar path deliberately uses explicit `-map 0:a:0 -map 1:v:0` so the selected sidecar replaces rather than duplicates existing artwork.
 
 ## CI/CD
 

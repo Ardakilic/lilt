@@ -23,6 +23,7 @@ Lilt stands for "lightweight intelligent lossless transcoder". It is also a form
   - 352.8kHz, 176.4kHz, 88.2kHz → 44.1kHz
 - 🔄 Preserves existing 16-bit FLAC files without unnecessary conversion
 - 📝 Preserves ID3 tags and cover art from original files using FFmpeg (default: enabled; use --no-preserve-metadata to disable)
+- 🖼️ Optional: Embeds conventionally named JPG/PNG sidecar artwork with `--embed-copied-image`
 - 🎶 Copies MP3 files without modification (unless format enforcement is enabled)
 - 🖼️ Optional: Copies JPG and PNG images from the source directory
 - 🔗 Optional: Creates filesystem hardlinks instead of copies for unchanged files with `--prefer-hardlinks`
@@ -86,7 +87,7 @@ You can use this tool in one of two ways:
      - Install on Debian/Ubuntu: `sudo apt install sox`
      - Install on macOS: `brew install sox`
      - Install on Windows: Use WSL and install depending on the subsystem, or download SoX Windows binaries
-   - **FFmpeg** must be installed for ALAC support and metadata preservation. [FFmpeg Downloads](https://ffmpeg.org/download.html)
+   - **FFmpeg** must be installed for ALAC support, metadata preservation, and `--embed-copied-image`. [FFmpeg Downloads](https://ffmpeg.org/download.html)
      - Install on Debian/Ubuntu: `sudo apt install ffmpeg`
      - Install on macOS: `brew install ffmpeg`
      - Install on Windows: Download from official site or use package manager
@@ -103,6 +104,7 @@ lilt <source_directory> [options]
 ```
 --target-dir <dir>              Specify target directory (default: ./transcoded)
 --copy-images                   Copy JPG and PNG files
+--embed-copied-image            Embed cover/front/folder JPG or PNG sidecar artwork in final audio outputs
 --no-preserve-metadata          Do not preserve ID3 tags and cover art using FFmpeg (default: false)
 --enforce-output-format <fmt>   Enforce output format for all files: flac, mp3, or alac
 --prefer-hardlinks              Prefer filesystem hardlinks over copying for files that do not need transcoding
@@ -166,7 +168,26 @@ lilt.exe "C:\Music\MyAlbum" --target-dir "C:\Music\MyAlbum-16bit" --prefer-hardl
 ./lilt ~/Music/MyAlbum --target-dir ~/Music/MyAlbum-16bit --prefer-hardlinks
 ```
 
-> **Note:** Hardlinks share inode data. Any in-place modification to the source or target file will affect both paths.
+> **Note:** Hardlinks share inode data. Any in-place modification to the source or target file will affect both paths. When `--embed-copied-image` successfully embeds artwork into an audio output, Lilt safely replaces that output with an independent file; standalone copied sidecar images may still be hardlinks.
+
+### Embedding Sidecar Artwork
+
+Use `--embed-copied-image` to embed artwork that is already beside each source audio file. Lilt searches only the source file's containing directory and uses this order, matching names case-insensitively:
+
+1. `cover.jpg`
+2. `cover.png`
+3. `front.jpg`
+4. `front.png`
+5. `folder.jpg`
+6. `folder.png`
+
+A selected sidecar replaces any artwork already embedded in the source/output. The flag is independent from `--copy-images`: use it alone to embed without copying standalone images, or use both to copy all JPG/PNG files and embed only the selected artwork. If a remux fails, Lilt keeps the valid audio output and reports a warning.
+
+```bash
+lilt ~/Music/MyAlbum --target-dir ~/Music/MyAlbum-16bit --embed-copied-image
+```
+
+Local mode requires FFmpeg whenever this flag is enabled, even with `--no-preserve-metadata`. Docker mode uses the FFmpeg binary provided by the selected Docker image.
 
 ## Docker Support
 
@@ -202,10 +223,11 @@ Alternative Docker images you can use:
    - 16-bit 44.1kHz/48kHz ALAC files are converted to FLAC maintaining the same quality
    - Hi-Res ALAC files follow the same bit depth and sample rate conversion rules as FLAC files
 4. ID3 tags and cover art are preserved from source to converted files using FFmpeg (unless --no-preserve-metadata is used)
-5. MP3 files are copied without modification
-6. If `--copy-images` is enabled, `.jpg` and `.png` files are copied to the target directory
-7. If `--prefer-hardlinks` is enabled, files that do not need transcoding are created as filesystem hardlinks when possible; otherwise, they are copied as usual
-8. The original folder structure is preserved in the target directory
+5. If `--embed-copied-image` is enabled, the selected same-directory sidecar is attached to each final audio output and replaces existing embedded artwork
+6. MP3 files are copied without modification
+7. If `--copy-images` is enabled, `.jpg` and `.png` files are copied to the target directory
+8. If `--prefer-hardlinks` is enabled, files that do not need transcoding are created as filesystem hardlinks when possible; otherwise, they are copied as usual
+9. The original folder structure is preserved in the target directory
 
 ### Format Enforcement Mode (with --enforce-output-format)
 
@@ -234,7 +256,8 @@ When using `--enforce-output-format`, all audio files are converted to the speci
 - The `-G` flag ensures proper gain handling
 - Uses `dither` when downsampling to 16-bit for better quality
 - Maintains the same folder structure in the target directory
-- Graceful error handling - if conversion fails, the original file is copied
+- Sidecar embedding uses a temporary output and only replaces a valid final audio file after FFmpeg succeeds
+- Graceful error handling - if conversion or sidecar embedding fails, the original/valid audio file is preserved
 
 ## Development
 
