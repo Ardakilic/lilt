@@ -48,9 +48,5 @@ Thumbs.db
 # Log files
 *.log
 
-# Serena MCP
-.serena/cache/
-.serena/project.local.yml
-
 # Local planning
 plan.md
