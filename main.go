@@ -315,7 +315,14 @@ func processAudioFiles() error {
 
 			if err := processAudioFile(path, targetPath, audioInfo, needsConversion, bitrateArgs, sampleRateArgs); err != nil {
 				fmt.Printf("Error: Audio conversion failed. Copying original file instead. Error: %v\n", err)
-				return copyAudioFile(path, targetPath)
+				fallbackPath := targetPath
+				if audioInfo.Format == "alac" {
+					// The target was rewritten to .flac for conversion, but the
+					// fallback preserves the original M4A data, so restore the
+					// .m4a extension.
+					fallbackPath = changeExtensionToM4A(targetPath)
+				}
+				return copyAudioFile(path, fallbackPath)
 			}
 		} else {
 			fmt.Printf("Transcode not needed: Copying or Hardlinking FLAC: %s\n", path)
