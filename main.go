@@ -205,6 +205,9 @@ func setupSoxCommand() error {
 
 		if needsFFmpeg {
 			if _, err := exec.LookPath("ffmpeg"); err != nil {
+				if config.EmbedCoverArt {
+					return fmt.Errorf("ffmpeg is not installed. --embed-cover-art requires FFmpeg; please install FFmpeg or use --use-docker option")
+				}
 				return fmt.Errorf("ffmpeg is not installed. Please install FFmpeg for ALAC support and metadata preservation, or use --use-docker option")
 			}
 		}
@@ -1165,33 +1168,33 @@ var orderedCoverNames = []string{
 }
 
 // findCoverImage returns the highest-priority sibling image in sourceDir
-// according to orderedCoverNames. It first tries the exact names with os.Stat
-// (fast path), then falls back to a single case-insensitive directory scan.
-// Only regular files count; unsupported extensions are treated as absent.
+// according to orderedCoverNames. For each name in order it accepts an exact
+// match first and then a case-insensitive match, so a higher-priority
+// case-insensitive match always beats a lower-priority exact match. Only
+// regular files count; unsupported extensions are treated as absent.
 // The second return value is false when no recognized image is found.
 func findCoverImage(sourceDir string) (string, bool) {
-	for _, name := range orderedCoverNames {
-		candidate := filepath.Join(sourceDir, name)
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate, true
+	// Build the case-insensitive lookup once when the directory can be
+	// read; exact-match checks below still run if it cannot.
+	var byLower map[string]string
+	if entries, err := os.ReadDir(sourceDir); err == nil {
+		byLower = make(map[string]string, len(entries))
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			byLower[strings.ToLower(e.Name())] = e.Name()
 		}
 	}
 
-	entries, err := os.ReadDir(sourceDir)
-	if err != nil {
-		return "", false
-	}
-	byLower := make(map[string]string, len(entries))
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		byLower[strings.ToLower(e.Name())] = e.Name()
-	}
 	for _, name := range orderedCoverNames {
+		candidate := filepath.Join(sourceDir, name)
+		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+			return candidate, true
+		}
 		if actual, ok := byLower[name]; ok {
 			candidate := filepath.Join(sourceDir, actual)
-			if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
 				return candidate, true
 			}
 		}
@@ -1246,13 +1249,22 @@ func embedImageIntoAudio(audioPath, imagePath string) error {
 		dockerAudio := getDockerTargetPath(audioPath)
 		dockerImage := getDockerPath(imagePath)
 		dockerTmp := getDockerTargetPath(tmpPath)
-		args := []string{"run", "--rm", "--entrypoint", "ffmpeg",
+		args := []string{"run", "--rm", "--entrypoint", "ffmpeg"}
+		// Run as the host user so files FFmpeg creates in the mounted
+		// target directory keep host ownership; otherwise Chmod/Chtimes
+		// on the temp file can fail for non-root users. Getuid/Getgid
+		// return -1 on platforms without POSIX UIDs (e.g. Windows),
+		// where the flag is skipped.
+		if uid, gid := os.Getuid(), os.Getgid(); uid >= 0 && gid >= 0 {
+			args = append(args, "--user", fmt.Sprintf("%d:%d", uid, gid))
+		}
+		args = append(args,
 			"-v", fmt.Sprintf("%s:/source", config.SourceDir),
 			"-v", fmt.Sprintf("%s:/target", config.TargetDir),
 			config.DockerImage,
 			"-y", "-i", dockerAudio, "-i", dockerImage,
 			"-map", "0:a", "-map", "1:v",
-			"-c", "copy"}
+			"-c", "copy")
 		args = append(args, extraArgs...)
 		args = append(args, dockerTmp)
 		cmd = exec.Command("docker", args...)

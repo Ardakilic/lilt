@@ -93,7 +93,7 @@ When an image is embedded, lilt SHALL replace any pre-existing embedded picture 
 
 ### Requirement: Failures warn and preserve the copy, never abort the run
 
-If no image is found, the image is corrupt/unsupported, FFmpeg is missing/fails, or the rename fails, lilt SHALL keep the pre-embed copied file and continue processing remaining files. Corrupt-image and FFmpeg failures SHALL emit a warning containing the image path, target path, and reason (`Warning: Failed to embed cover art from <image> into <target>: <err>, keeping copied audio without embedded art`). Missing-image SHALL be silent. `sameFile(src, dst)` SHALL skip the embed silently.
+If no image is found, the image is corrupt/unsupported, FFmpeg is missing/fails, or the rename fails, lilt SHALL keep the pre-embed copied file and continue processing remaining files. Corrupt-image and FFmpeg failures SHALL emit a warning containing the image path, target path, and reason (`Warning: Failed to embed cover art from <image> into <target>: <err>, keeping copied audio without embedded art`). Missing-image SHALL be silent. When source and target are the same path, the embed SHALL be skipped silently (hardlinked copies with distinct paths are still embedded; the temp file + rename breaks the link instead of mutating the source).
 
 #### Scenario: Corrupt image keeps copy
 

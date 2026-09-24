@@ -6664,6 +6664,26 @@ func TestFindCoverImagePriority(t *testing.T) {
 	}
 }
 
+func TestFindCoverImagePriorityAcrossCaseVariants(t *testing.T) {
+	// A higher-priority case-insensitive match must beat a lower-priority
+	// exact match: FRONT.JPG (front.jpg, 4th group) outranks folder.jpg
+	// (exact, 7th group).
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "folder.jpg"), []byte("folder"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "FRONT.JPG"), []byte("front"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := findCoverImage(dir)
+	if !ok {
+		t.Fatal("expected to resolve a cover image, got none")
+	}
+	if strings.ToLower(filepath.Base(got)) != "front.jpg" {
+		t.Errorf("expected FRONT.JPG to win on priority, got %q", filepath.Base(got))
+	}
+}
+
 func TestFindCoverImageCaseInsensitive(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "Cover.JPG"), []byte("cover"), 0644); err != nil {
