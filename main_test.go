@@ -6684,6 +6684,57 @@ func TestFindCoverImagePriorityAcrossCaseVariants(t *testing.T) {
 	}
 }
 
+func TestProcessAudioFilesALACConversionFallbackKeepsM4A(t *testing.T) {
+	requireFFmpegTools(t)
+	originalConfig := config
+	defer func() { config = originalConfig }()
+
+	root := t.TempDir()
+	srcDir := filepath.Join(root, "src")
+	dstDir := filepath.Join(root, "dst")
+	if err := os.MkdirAll(srcDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Hi-Res ALAC forces needsConversion, so processALAC reaches the SoX
+	// quality-adjustment step. A nonexistent SoX binary fails portably on
+	// every platform and triggers the conversion-failure fallback in
+	// processAudioFiles.
+	src := filepath.Join(srcDir, "song.m4a")
+	genArgs := []string{"-y", "-v", "error", "-f", "lavfi",
+		"-i", "sine=frequency=440:duration=1:sample_rate=96000",
+		"-c:a", "alac", "-sample_fmt", "s32p", src}
+	if out, err := exec.Command("ffmpeg", genArgs...).CombinedOutput(); err != nil {
+		t.Fatalf("failed to generate hi-res ALAC: %v\n%s", err, out)
+	}
+	writeSolidImage(t, filepath.Join(srcDir, "cover.jpg"), color.RGBA{0, 0, 255, 255})
+
+	config = Config{
+		SourceDir:          srcDir,
+		TargetDir:          dstDir,
+		SoxCommand:         "lilt-test-nonexistent-sox-binary",
+		NoPreserveMetadata: true,
+		EmbedCoverArt:      true,
+		UseDocker:          false,
+	}
+
+	if err := processAudioFiles(); err != nil {
+		t.Fatalf("processAudioFiles failed: %v", err)
+	}
+
+	// The fallback preserves the original M4A data, so it must keep the
+	// .m4a extension even though the conversion target was .flac.
+	if _, err := os.Stat(filepath.Join(dstDir, "song.m4a")); err != nil {
+		t.Fatalf("expected fallback copy at song.m4a: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dstDir, "song.flac")); !os.IsNotExist(err) {
+		t.Errorf("expected no song.flac in target (original M4A data must keep .m4a extension)")
+	}
+	// Correct extension also routes embedding through the M4A template.
+	assertSingleAttachedPic(t, filepath.Join(dstDir, "song.m4a"))
+	assertNoEmbedTempFiles(t, root)
+}
+
 func TestFindCoverImageCaseInsensitive(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "Cover.JPG"), []byte("cover"), 0644); err != nil {
