@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -32,6 +33,7 @@ type Config struct {
 	NoPreserveMetadata  bool
 	EnforceOutputFormat string // "flac", "mp3", "alac", or empty for default behavior
 	PreferHardlinks     bool
+	EmbedCoverArt       bool
 }
 
 // AudioInfo holds information about an audio file
@@ -68,6 +70,13 @@ With the --prefer-hardlinks flag, files that do not need transcoding are created
 filesystem hardlinks instead of full copies when source and target reside on the same
 filesystem. Hardlink failures fall back to the normal copy behavior.
 
+With the --embed-cover-art flag, a sibling folder image (cover.jpg, cover.jpeg,
+cover.png, front.jpg, front.jpeg, front.png, folder.jpg, folder.jpeg, folder.png,
+in that priority order, matched case-insensitively) found next to each copied
+audio file is embedded as cover art into the copy, replacing any existing
+embedded art. The flag works with or without --copy-images and never modifies
+source files; a hardlinked copy becomes an independent file when art is embedded.
+
 Copyright (C) 2025 Arda Kilicdagi
 Licensed under MIT License`,
 	Args:    cobra.MaximumNArgs(1),
@@ -84,6 +93,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&config.NoPreserveMetadata, "no-preserve-metadata", false, "Do not preserve ID3 tags and cover art using FFmpeg (metadata is preserved by default)")
 	rootCmd.Flags().StringVar(&config.EnforceOutputFormat, "enforce-output-format", "", "Enforce output format for all files: flac, mp3, or alac")
 	rootCmd.Flags().BoolVar(&config.PreferHardlinks, "prefer-hardlinks", false, "Prefer filesystem hardlinks over copying for files that do not need transcoding")
+	rootCmd.Flags().BoolVar(&config.EmbedCoverArt, "embed-cover-art", false, "Embed folder cover image (cover/front/folder.jpg/png) as cover art into copied audio files (replaces existing embedded art)")
 	rootCmd.Flags().BoolVar(&selfUpdateFlag, "self-update", false, "Check for updates and self-update if newer version available")
 
 	// Set default values
@@ -183,8 +193,9 @@ func setupSoxCommand() error {
 			return fmt.Errorf("sox is not installed. Please install sox or use --use-docker option")
 		}
 
-		// Check for FFmpeg only when needed
-		needsFFmpeg := !config.NoPreserveMetadata
+		// Check for FFmpeg when metadata is preserved, when cover art is
+		// embedded into copies, or when ALAC files may need it.
+		needsFFmpeg := !config.NoPreserveMetadata || config.EmbedCoverArt
 
 		// Quick check if directory contains ALAC files (if metadata preservation is disabled)
 		if !needsFFmpeg {
@@ -194,6 +205,9 @@ func setupSoxCommand() error {
 
 		if needsFFmpeg {
 			if _, err := exec.LookPath("ffmpeg"); err != nil {
+				if config.EmbedCoverArt {
+					return fmt.Errorf("ffmpeg is not installed. --embed-cover-art requires FFmpeg; please install FFmpeg or use --use-docker option")
+				}
 				return fmt.Errorf("ffmpeg is not installed. Please install FFmpeg for ALAC support and metadata preservation, or use --use-docker option")
 			}
 		}
@@ -261,14 +275,14 @@ func processAudioFiles() error {
 		// Handle MP3 files - just copy them
 		if ext == ".mp3" {
 			fmt.Printf("Transcode not needed: Copying or Hardlinking MP3 file: %s\n", path)
-			return copyFile(path, targetPath)
+			return copyAudioFile(path, targetPath)
 		}
 
 		// Process FLAC and ALAC files
 		audioInfo, err := getAudioInfo(path)
 		if err != nil {
 			fmt.Printf("Warning: Could not get audio info for %s, copying original\n", path)
-			return copyFile(path, targetPath)
+			return copyAudioFile(path, targetPath)
 		}
 
 		fmt.Printf("Detected: %d bits, %d Hz, %s format\n", audioInfo.Bits, audioInfo.Rate, audioInfo.Format)
@@ -301,11 +315,18 @@ func processAudioFiles() error {
 
 			if err := processAudioFile(path, targetPath, audioInfo, needsConversion, bitrateArgs, sampleRateArgs); err != nil {
 				fmt.Printf("Error: Audio conversion failed. Copying original file instead. Error: %v\n", err)
-				return copyFile(path, targetPath)
+				fallbackPath := targetPath
+				if audioInfo.Format == "alac" {
+					// The target was rewritten to .flac for conversion, but the
+					// fallback preserves the original M4A data, so restore the
+					// .m4a extension.
+					fallbackPath = changeExtensionToM4A(targetPath)
+				}
+				return copyAudioFile(path, fallbackPath)
 			}
 		} else {
 			fmt.Printf("Transcode not needed: Copying or Hardlinking FLAC: %s\n", path)
-			return copyFile(path, targetPath)
+			return copyAudioFile(path, targetPath)
 		}
 
 		return nil
@@ -323,7 +344,7 @@ func processAudioFileWithEnforcedFormat(sourcePath, targetPath, sourceExt string
 	// Skip MP3 files if they don't need processing
 	if sourceExt == ".mp3" && config.EnforceOutputFormat == "mp3" {
 		fmt.Printf("Transcode not needed: Copying or Hardlinking MP3 file: %s (already in target format)\n", sourcePath)
-		return copyFile(sourcePath, targetPath)
+		return copyAudioFile(sourcePath, targetPath)
 	}
 
 	// Get audio info for FLAC and ALAC files
@@ -331,7 +352,7 @@ func processAudioFileWithEnforcedFormat(sourcePath, targetPath, sourceExt string
 		audioInfo, err = getAudioInfo(sourcePath)
 		if err != nil {
 			fmt.Printf("Warning: Could not get audio info for %s, copying original\n", sourcePath)
-			return copyFile(sourcePath, targetPath)
+			return copyAudioFile(sourcePath, targetPath)
 		}
 		fmt.Printf("Detected: %d bits, %d Hz, %s format\n", audioInfo.Bits, audioInfo.Rate, audioInfo.Format)
 	}
@@ -361,7 +382,7 @@ func processToFLAC(sourcePath, targetPath, sourceExt string, audioInfo *AudioInf
 		fmt.Printf("Transcode not needed: Copying or Hardlinking MP3: %s (MP3 files are not converted to lossless formats)\n", sourcePath)
 		// Keep original extension for MP3
 		originalTargetPath := strings.TrimSuffix(targetPath, ".flac") + ".mp3"
-		return copyFile(sourcePath, originalTargetPath)
+		return copyAudioFile(sourcePath, originalTargetPath)
 	}
 
 	if sourceExt == ".flac" && audioInfo != nil {
@@ -369,7 +390,7 @@ func processToFLAC(sourcePath, targetPath, sourceExt string, audioInfo *AudioInf
 		needsConversion, bitrateArgs, sampleRateArgs := determineConversion(audioInfo)
 		if !needsConversion {
 			fmt.Printf("Transcode not needed: Copying or Hardlinking FLAC: %s (already 16-bit)\n", sourcePath)
-			return copyFile(sourcePath, targetPath)
+			return copyAudioFile(sourcePath, targetPath)
 		} else {
 			fmt.Printf("Converting FLAC: %s (reducing quality to 16-bit)\n", sourcePath)
 			return processAudioFile(sourcePath, targetPath, audioInfo, needsConversion, bitrateArgs, sampleRateArgs)
@@ -398,7 +419,7 @@ func processToMP3(sourcePath, targetPath, sourceExt string, audioInfo *AudioInfo
 
 	if sourceExt == ".mp3" {
 		fmt.Printf("Transcode not needed: Copying or Hardlinking MP3: %s (already in target format)\n", sourcePath)
-		return copyFile(sourcePath, targetPath)
+		return copyAudioFile(sourcePath, targetPath)
 	}
 
 	// Convert FLAC or ALAC to MP3 at 320kbps
@@ -417,7 +438,7 @@ func processToALAC(sourcePath, targetPath, sourceExt string, audioInfo *AudioInf
 		// Check if ALAC needs conversion or can be copied
 		if audioInfo.Bits == 16 && (audioInfo.Rate == 44100 || audioInfo.Rate == 48000) {
 			fmt.Printf("Transcode not needed: Copying or Hardlinking ALAC: %s (already 16-bit)\n", sourcePath)
-			return copyFile(sourcePath, targetPath)
+			return copyAudioFile(sourcePath, targetPath)
 		} else {
 			fmt.Printf("Converting ALAC: %s (reducing quality to 16-bit)\n", sourcePath)
 			return convertToALAC(sourcePath, targetPath, audioInfo)
@@ -435,7 +456,7 @@ func processToALAC(sourcePath, targetPath, sourceExt string, audioInfo *AudioInf
 		fmt.Printf("Transcode not needed: Copying or Hardlinking MP3: %s (MP3 files are not converted to lossless formats)\n", sourcePath)
 		// Keep original extension for MP3
 		originalTargetPath := strings.TrimSuffix(targetPath, ".m4a") + ".mp3"
-		return copyFile(sourcePath, originalTargetPath)
+		return copyAudioFile(sourcePath, originalTargetPath)
 	}
 
 	return fmt.Errorf("unsupported source format for ALAC conversion: %s", sourceExt)
@@ -973,7 +994,7 @@ func determineConversion(info *AudioInfo) (bool, []string, []string) {
 // If no conversion is needed, it copies the file directly.
 func processFlac(sourcePath, targetPath string, needsConversion bool, bitrateArgs, sampleRateArgs []string) error {
 	if !needsConversion {
-		return copyFile(sourcePath, targetPath)
+		return copyAudioFile(sourcePath, targetPath)
 	}
 
 	var tempPath string
@@ -1089,6 +1110,7 @@ func normalizeForDocker(base, path string) string {
 	}
 	return filepath.ToSlash(rel)
 }
+
 // mergeMetadataWithFFmpeg combines audio from the converted temp file with
 // metadata and cover art from the original source file using FFmpeg. On
 // success the temp file is removed; if NoPreserveMetadata is set it simply
@@ -1140,6 +1162,192 @@ func mergeMetadataWithFFmpeg(sourcePath, tempConvertedPath, targetPath string) e
 		fmt.Printf("Warning: Failed to remove temp file %s: %v\n", tempConvertedPath, err)
 	}
 
+	return nil
+}
+
+// orderedCoverNames is the strict priority order used to resolve the sibling
+// folder image embedded by --embed-cover-art. The first existing regular file
+// wins. Matching is case-insensitive (see findCoverImage).
+var orderedCoverNames = []string{
+	"cover.jpg", "cover.jpeg", "cover.png",
+	"front.jpg", "front.jpeg", "front.png",
+	"folder.jpg", "folder.jpeg", "folder.png",
+}
+
+// findCoverImage returns the highest-priority sibling image in sourceDir
+// according to orderedCoverNames. For each name in order it accepts an exact
+// match first and then a case-insensitive match, so a higher-priority
+// case-insensitive match always beats a lower-priority exact match. Only
+// regular files count; unsupported extensions are treated as absent.
+// The second return value is false when no recognized image is found.
+func findCoverImage(sourceDir string) (string, bool) {
+	// Build the case-insensitive lookup once when the directory can be
+	// read; exact-match checks below still run if it cannot.
+	var byLower map[string]string
+	if entries, err := os.ReadDir(sourceDir); err == nil {
+		byLower = make(map[string]string, len(entries))
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			byLower[strings.ToLower(e.Name())] = e.Name()
+		}
+	}
+
+	for _, name := range orderedCoverNames {
+		candidate := filepath.Join(sourceDir, name)
+		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+			return candidate, true
+		}
+		if actual, ok := byLower[name]; ok {
+			candidate := filepath.Join(sourceDir, actual)
+			if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() {
+				return candidate, true
+			}
+		}
+	}
+	return "", false
+}
+
+// embedImageIntoAudio embeds imagePath as cover art into the audio file at
+// audioPath (.flac, .mp3, or .m4a), replacing any existing embedded picture
+// without re-encoding the audio or the image. It writes to a temp file next
+// to audioPath and renames over it (never in place, so a hardlinked copy
+// becomes an independent file instead of mutating the source inode), then
+// restores the pre-embed file mode and modification time. Under --use-docker
+// the work runs via the configured Docker image with both the source
+// (image input) and target (audio in/out) directories mounted.
+func embedImageIntoAudio(audioPath, imagePath string) error {
+	ext := filepath.Ext(audioPath)
+	lowerExt := strings.ToLower(ext)
+
+	var extraArgs []string
+	switch lowerExt {
+	case ".flac":
+		extraArgs = []string{"-disposition:v", "attached_pic"}
+	case ".mp3":
+		extraArgs = []string{
+			"-id3v2_version", "3", "-write_id3v1", "1",
+			"-metadata:s:v", "title=Album cover",
+			"-metadata:s:v", "comment=Cover (front)",
+		}
+	case ".m4a":
+		extraArgs = []string{"-disposition:v:0", "attached_pic"}
+	default:
+		return fmt.Errorf("unsupported audio format for cover art embedding: %s", ext)
+	}
+
+	tmpPath := strings.TrimSuffix(audioPath, ext) + ".embed.tmp" + ext
+
+	// Record mode/mtime before FFmpeg rewrites the file so they can be restored.
+	var mode os.FileMode
+	var modTime time.Time
+	if info, err := os.Stat(audioPath); err == nil {
+		mode = info.Mode()
+		modTime = info.ModTime()
+	} else {
+		return fmt.Errorf("failed to stat audio file for embedding: %w", err)
+	}
+
+	// Map only the audio streams from the copied file plus the image stream,
+	// so any pre-existing embedded picture is dropped rather than duplicated.
+	var cmd *exec.Cmd
+	if config.UseDocker {
+		dockerAudio := getDockerTargetPath(audioPath)
+		dockerImage := getDockerPath(imagePath)
+		dockerTmp := getDockerTargetPath(tmpPath)
+		args := []string{"run", "--rm", "--entrypoint", "ffmpeg"}
+		// Run as the host user so files FFmpeg creates in the mounted
+		// target directory keep host ownership; otherwise Chmod/Chtimes
+		// on the temp file can fail for non-root users. Getuid/Getgid
+		// return -1 on platforms without POSIX UIDs (e.g. Windows),
+		// where the flag is skipped.
+		if uid, gid := os.Getuid(), os.Getgid(); uid >= 0 && gid >= 0 {
+			args = append(args, "--user", fmt.Sprintf("%d:%d", uid, gid))
+		}
+		args = append(args,
+			"-v", fmt.Sprintf("%s:/source", config.SourceDir),
+			"-v", fmt.Sprintf("%s:/target", config.TargetDir),
+			config.DockerImage,
+			"-y", "-i", dockerAudio, "-i", dockerImage,
+			"-map", "0:a", "-map", "1:v",
+			"-c", "copy")
+		args = append(args, extraArgs...)
+		args = append(args, dockerTmp)
+		cmd = exec.Command("docker", args...)
+	} else {
+		args := []string{
+			"-y", "-i", audioPath, "-i", imagePath,
+			"-map", "0:a", "-map", "1:v",
+			"-c", "copy"}
+		args = append(args, extraArgs...)
+		args = append(args, tmpPath)
+		cmd = exec.Command("ffmpeg", args...)
+	}
+
+	if err := cmd.Run(); err != nil {
+		os.Remove(tmpPath) // best effort cleanup
+		return fmt.Errorf("FFmpeg cover art embed failed: %w", err)
+	}
+
+	if mode != 0 {
+		if err := os.Chmod(tmpPath, mode); err != nil {
+			os.Remove(tmpPath)
+			return fmt.Errorf("failed to restore mode after embedding: %w", err)
+		}
+	}
+	if !modTime.IsZero() {
+		if err := os.Chtimes(tmpPath, modTime, modTime); err != nil {
+			os.Remove(tmpPath)
+			return fmt.Errorf("failed to restore timestamps after embedding: %w", err)
+		}
+	}
+	if err := os.Rename(tmpPath, audioPath); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to replace audio file after embedding: %w", err)
+	}
+	return nil
+}
+
+// embedCoverArtIfRequested embeds a sibling folder image into a copied audio
+// file when config.EmbedCoverArt is set. It is a silent no-op when the flag
+// is off, the target is not .flac/.mp3/.m4a, source and target are the same
+// path (in-place run), or no sibling image exists. Note it deliberately does
+// NOT skip hardlinked copies (same inode, different paths): embedding writes
+// to a temp file and renames over the target, which breaks the link instead
+// of mutating the shared source inode. A corrupt image or FFmpeg failure is
+// logged as a warning and the copied file is preserved; it never returns an
+// error.
+func embedCoverArtIfRequested(sourceAudioPath, targetAudioPath string) {
+	if !config.EmbedCoverArt {
+		return
+	}
+	ext := strings.ToLower(filepath.Ext(targetAudioPath))
+	if ext != ".flac" && ext != ".mp3" && ext != ".m4a" {
+		return
+	}
+	if samePath(sourceAudioPath, targetAudioPath) {
+		return
+	}
+	imagePath, found := findCoverImage(filepath.Dir(sourceAudioPath))
+	if !found {
+		return
+	}
+	if err := embedImageIntoAudio(targetAudioPath, imagePath); err != nil {
+		fmt.Printf("Warning: Failed to embed cover art from %s into %s: %v, keeping copied audio without embedded art\n", imagePath, targetAudioPath, err)
+		return
+	}
+	fmt.Printf("Embedding cover art from %s into %s\n", filepath.Base(imagePath), targetAudioPath)
+}
+
+// copyAudioFile copies an audio file to the destination path and, when
+// --embed-cover-art is set, embeds the source folder's cover image into the
+// copy. Copy errors are returned; embed failures only log a warning.
+func copyAudioFile(sourceAudioPath, targetAudioPath string) error {
+	if err := copyFile(sourceAudioPath, targetAudioPath); err != nil {
+		return err
+	}
+	embedCoverArtIfRequested(sourceAudioPath, targetAudioPath)
 	return nil
 }
 
@@ -1234,6 +1442,19 @@ func doCopyFile(src, dst string) error {
 	}
 
 	return nil
+}
+
+// samePath reports whether path1 and path2 are the same path after
+// absolutizing. Unlike sameFile, it does not consider hardlinks (same inode,
+// different paths) equal, so an embed step can still break a hardlink via
+// temp file + rename without touching the source inode.
+func samePath(path1, path2 string) bool {
+	abs1, err1 := filepath.Abs(path1)
+	abs2, err2 := filepath.Abs(path2)
+	if err1 != nil || err2 != nil {
+		return path1 == path2
+	}
+	return abs1 == abs2
 }
 
 // sameFile reports whether path1 and path2 refer to the same file.

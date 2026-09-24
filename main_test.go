@@ -5,14 +5,20 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -6372,5 +6378,926 @@ func TestCopyFileWithoutHardlinks(t *testing.T) {
 
 	if string(content) != "hello" {
 		t.Errorf("Expected destination content to match source, got %q", string(content))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Embed cover art (--embed-cover-art) tests
+// ---------------------------------------------------------------------------
+
+// requireFFmpegTools skips the test when ffmpeg or ffprobe is unavailable.
+func requireFFmpegTools(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not available, skipping cover art embed test")
+	}
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skip("ffprobe not available, skipping cover art embed test")
+	}
+}
+
+// generateTestAudioFile creates a 1s synthetic audio file with ffmpeg.
+// Format is one of "flac", "mp3" or "m4a".
+func generateTestAudioFile(t *testing.T, path, format string) {
+	t.Helper()
+	var audioArgs []string
+	switch format {
+	case "flac":
+		audioArgs = []string{"-c:a", "flac"}
+	case "mp3":
+		audioArgs = []string{"-c:a", "libmp3lame", "-b:a", "128k"}
+	case "m4a":
+		audioArgs = []string{"-c:a", "alac"}
+	default:
+		t.Fatalf("unsupported test audio format %q", format)
+	}
+	args := append([]string{"-y", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=1"}, audioArgs...)
+	args = append(args, path)
+	if out, err := exec.Command("ffmpeg", args...).CombinedOutput(); err != nil {
+		t.Fatalf("failed to generate %s test audio: %v\n%s", format, err, out)
+	}
+}
+
+// writeSolidImage writes a 16x16 solid-color image using only the Go standard
+// library. A .png extension selects PNG encoding, anything else selects JPEG.
+func writeSolidImage(t *testing.T, path string, c color.Color) {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, 16, 16))
+	for y := 0; y < 16; y++ {
+		for x := 0; x < 16; x++ {
+			img.Set(x, y, c)
+		}
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("failed to create test image %s: %v", path, err)
+	}
+	defer f.Close()
+	if strings.ToLower(filepath.Ext(path)) == ".png" {
+		if err := png.Encode(f, img); err != nil {
+			t.Fatalf("failed to encode test PNG %s: %v", path, err)
+		}
+		return
+	}
+	if err := jpeg.Encode(f, img, &jpeg.Options{Quality: 90}); err != nil {
+		t.Fatalf("failed to encode test JPEG %s: %v", path, err)
+	}
+}
+
+// probeAudioStream returns the first audio stream's codec, sample rate and
+// duration as reported by ffprobe.
+func probeAudioStream(t *testing.T, path string) (codec, sampleRate, duration string) {
+	t.Helper()
+	out, err := exec.Command("ffprobe", "-v", "error", "-select_streams", "a:0",
+		"-show_entries", "stream=codec_name,sample_rate,duration",
+		"-of", "default=noprint_wrappers=1", path).CombinedOutput()
+	if err != nil {
+		t.Fatalf("ffprobe audio stream failed for %s: %v\n%s", path, err, out)
+	}
+	info := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if ok {
+			info[strings.TrimSpace(k)] = strings.TrimSpace(v)
+		}
+	}
+	return info["codec_name"], info["sample_rate"], info["duration"]
+}
+
+// attachedPicInfo returns the number of video streams flagged attached_pic
+// and the codec of the first such stream.
+func attachedPicInfo(t *testing.T, path string) (count int, codec string) {
+	t.Helper()
+	out, err := exec.Command("ffprobe", "-v", "error",
+		"-show_entries", "stream=codec_type,codec_name:stream_disposition=attached_pic",
+		"-of", "csv", path).CombinedOutput()
+	if err != nil {
+		t.Fatalf("ffprobe stream listing failed for %s: %v\n%s", path, err, out)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		fields := strings.Split(strings.TrimSpace(line), ",")
+		if len(fields) != 4 || fields[0] != "stream" {
+			continue
+		}
+		if fields[2] == "video" && fields[3] == "1" {
+			count++
+			if codec == "" {
+				codec = fields[1]
+			}
+		}
+	}
+	return count, codec
+}
+
+// assertSingleAttachedPic fails unless path has exactly one attached_pic
+// video stream with a PNG or MJPEG codec.
+func assertSingleAttachedPic(t *testing.T, path string) {
+	t.Helper()
+	n, codec := attachedPicInfo(t, path)
+	if n != 1 {
+		t.Fatalf("expected exactly 1 attached_pic stream in %s, got %d", path, n)
+	}
+	if codec != "png" && codec != "mjpeg" {
+		t.Fatalf("expected png or mjpeg cover art in %s, got %q", path, codec)
+	}
+}
+
+// assertNoEmbedTempFiles fails if dir contains leftover *.embed.tmp.* files.
+func assertNoEmbedTempFiles(t *testing.T, dir string) {
+	t.Helper()
+	var residue []string
+	_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		if strings.Contains(filepath.Base(path), ".embed.tmp.") {
+			residue = append(residue, path)
+		}
+		return nil
+	})
+	if len(residue) > 0 {
+		t.Fatalf("found leftover embed temp files: %v", residue)
+	}
+}
+
+// stampFileForPreservationCheck sets a deterministic mode and mtime on path
+// and returns them for later comparison.
+func stampFileForPreservationCheck(t *testing.T, path string) (os.FileMode, time.Time) {
+	t.Helper()
+	if err := os.Chmod(path, 0644); err != nil {
+		t.Fatalf("failed to chmod %s: %v", path, err)
+	}
+	mtime := time.Date(2022, 5, 4, 3, 2, 1, 0, time.UTC)
+	if err := os.Chtimes(path, mtime, mtime); err != nil {
+		t.Fatalf("failed to chtimes %s: %v", path, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("failed to stat %s: %v", path, err)
+	}
+	return info.Mode(), info.ModTime()
+}
+
+// assertModeAndTimePreserved fails if path's mode or mtime drifted.
+func assertModeAndTimePreserved(t *testing.T, path string, wantMode os.FileMode, wantMtime time.Time) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("failed to stat %s: %v", path, err)
+	}
+	if info.Mode() != wantMode {
+		t.Errorf("mode not preserved for %s: want %v, got %v", path, wantMode, info.Mode())
+	}
+	if !info.ModTime().Equal(wantMtime) {
+		t.Errorf("mtime not preserved for %s: want %v, got %v", path, wantMtime, info.ModTime())
+	}
+}
+
+// assertDurationsClose fails if the audio duration changed beyond tolerance.
+func assertDurationsClose(t *testing.T, want, got string) {
+	t.Helper()
+	w, err1 := strconv.ParseFloat(want, 64)
+	g, err2 := strconv.ParseFloat(got, 64)
+	if err1 != nil || err2 != nil {
+		if want != got {
+			t.Errorf("duration changed: want %q, got %q", want, got)
+		}
+		return
+	}
+	if diff := w - g; diff < -0.01 || diff > 0.01 {
+		t.Errorf("duration changed: want %q, got %q", want, got)
+	}
+}
+
+// sha256OfFile returns the SHA-256 digest of a file's contents.
+func sha256OfFile(t *testing.T, path string) [32]byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read %s: %v", path, err)
+	}
+	return sha256.Sum256(b)
+}
+
+// extractEmbeddedArt extracts the first video stream verbatim and returns
+// its bytes.
+func extractEmbeddedArt(t *testing.T, audioPath, outPath string) []byte {
+	t.Helper()
+	if out, err := exec.Command("ffmpeg", "-y", "-v", "error",
+		"-i", audioPath, "-map", "0:v:0", "-c", "copy", outPath).CombinedOutput(); err != nil {
+		t.Fatalf("failed to extract embedded art from %s: %v\n%s", audioPath, err, out)
+	}
+	b, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("failed to read extracted art %s: %v", outPath, err)
+	}
+	return b
+}
+
+func TestFindCoverImagePriority(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range orderedCoverNames {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("img:"+name), 0644); err != nil {
+			t.Fatalf("failed to create %s: %v", name, err)
+		}
+	}
+	check := func(want string) {
+		t.Helper()
+		got, ok := findCoverImage(dir)
+		if want == "" {
+			if ok || got != "" {
+				t.Fatalf("expected no cover image, got %q (found=%v)", got, ok)
+			}
+			return
+		}
+		if !ok {
+			t.Fatalf("expected cover image %q, got none", want)
+		}
+		if filepath.Base(got) != want {
+			t.Fatalf("expected cover image %q, got %q", want, filepath.Base(got))
+		}
+	}
+
+	check("cover.jpg")
+	os.Remove(filepath.Join(dir, "cover.jpg"))
+	check("cover.jpeg")
+	os.Remove(filepath.Join(dir, "cover.jpeg"))
+	os.Remove(filepath.Join(dir, "cover.png"))
+	check("front.jpg")
+	os.Remove(filepath.Join(dir, "front.jpg"))
+	os.Remove(filepath.Join(dir, "front.jpeg"))
+	os.Remove(filepath.Join(dir, "front.png"))
+	check("folder.jpg")
+	os.Remove(filepath.Join(dir, "folder.jpg"))
+	os.Remove(filepath.Join(dir, "folder.jpeg"))
+	check("folder.png")
+
+	// Subdirectory isolation: each disc resolves its own sibling image and
+	// never falls through to the parent or a sibling directory.
+	disc1 := filepath.Join(dir, "disc1")
+	disc2 := filepath.Join(dir, "disc2")
+	if err := os.MkdirAll(disc1, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(disc2, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(disc1, "cover.jpg"), []byte("d1"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(disc2, "front.jpg"), []byte("d2"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := findCoverImage(disc1); !ok || got != filepath.Join(disc1, "cover.jpg") {
+		t.Errorf("disc1: expected %q, got %q (found=%v)", filepath.Join(disc1, "cover.jpg"), got, ok)
+	}
+	if got, ok := findCoverImage(disc2); !ok || got != filepath.Join(disc2, "front.jpg") {
+		t.Errorf("disc2: expected %q, got %q (found=%v)", filepath.Join(disc2, "front.jpg"), got, ok)
+	}
+
+	// Empty and nonexistent directories resolve to ("", false).
+	if got, ok := findCoverImage(t.TempDir()); ok || got != "" {
+		t.Errorf("empty dir: expected (\"\", false), got (%q, %v)", got, ok)
+	}
+	if got, ok := findCoverImage(filepath.Join(dir, "does-not-exist")); ok || got != "" {
+		t.Errorf("nonexistent dir: expected (\"\", false), got (%q, %v)", got, ok)
+	}
+}
+
+func TestFindCoverImagePriorityAcrossCaseVariants(t *testing.T) {
+	// A higher-priority case-insensitive match must beat a lower-priority
+	// exact match: FRONT.JPG (front.jpg, 4th group) outranks folder.jpg
+	// (exact, 7th group).
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "folder.jpg"), []byte("folder"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "FRONT.JPG"), []byte("front"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := findCoverImage(dir)
+	if !ok {
+		t.Fatal("expected to resolve a cover image, got none")
+	}
+	if strings.ToLower(filepath.Base(got)) != "front.jpg" {
+		t.Errorf("expected FRONT.JPG to win on priority, got %q", filepath.Base(got))
+	}
+}
+
+func TestProcessAudioFilesALACConversionFallbackKeepsM4A(t *testing.T) {
+	requireFFmpegTools(t)
+	originalConfig := config
+	defer func() { config = originalConfig }()
+
+	root := t.TempDir()
+	srcDir := filepath.Join(root, "src")
+	dstDir := filepath.Join(root, "dst")
+	if err := os.MkdirAll(srcDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Hi-Res ALAC forces needsConversion, so processALAC reaches the SoX
+	// quality-adjustment step. A nonexistent SoX binary fails portably on
+	// every platform and triggers the conversion-failure fallback in
+	// processAudioFiles.
+	src := filepath.Join(srcDir, "song.m4a")
+	genArgs := []string{"-y", "-v", "error", "-f", "lavfi",
+		"-i", "sine=frequency=440:duration=1:sample_rate=96000",
+		"-c:a", "alac", "-sample_fmt", "s32p", src}
+	if out, err := exec.Command("ffmpeg", genArgs...).CombinedOutput(); err != nil {
+		t.Fatalf("failed to generate hi-res ALAC: %v\n%s", err, out)
+	}
+	writeSolidImage(t, filepath.Join(srcDir, "cover.jpg"), color.RGBA{0, 0, 255, 255})
+
+	config = Config{
+		SourceDir:          srcDir,
+		TargetDir:          dstDir,
+		SoxCommand:         "lilt-test-nonexistent-sox-binary",
+		NoPreserveMetadata: true,
+		EmbedCoverArt:      true,
+		UseDocker:          false,
+	}
+
+	if err := processAudioFiles(); err != nil {
+		t.Fatalf("processAudioFiles failed: %v", err)
+	}
+
+	// The fallback preserves the original M4A data, so it must keep the
+	// .m4a extension even though the conversion target was .flac.
+	if _, err := os.Stat(filepath.Join(dstDir, "song.m4a")); err != nil {
+		t.Fatalf("expected fallback copy at song.m4a: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dstDir, "song.flac")); !os.IsNotExist(err) {
+		t.Errorf("expected no song.flac in target (original M4A data must keep .m4a extension)")
+	}
+	// Correct extension also routes embedding through the M4A template.
+	assertSingleAttachedPic(t, filepath.Join(dstDir, "song.m4a"))
+	// And the fallback file holds the original ALAC audio, not FLAC data.
+	if codec, _, _ := probeAudioStream(t, filepath.Join(dstDir, "song.m4a")); codec != "alac" {
+		t.Errorf("expected fallback song.m4a to contain alac audio, got %q", codec)
+	}
+	assertNoEmbedTempFiles(t, root)
+}
+
+func TestFindCoverImageCaseInsensitive(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Cover.JPG"), []byte("cover"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "FRONT.Png"), []byte("front"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := findCoverImage(dir)
+	if !ok {
+		t.Fatal("expected to resolve a cover image, got none")
+	}
+	// Note: on case-insensitive filesystems the exact-case fast path may
+	// return the canonical "cover.jpg" spelling; compare case-folded and
+	// verify the resolved path exists.
+	if strings.ToLower(filepath.Base(got)) != "cover.jpg" {
+		t.Errorf("expected Cover.JPG to win on priority, got %q", filepath.Base(got))
+	}
+	if _, err := os.Stat(got); err != nil {
+		t.Errorf("resolved cover path does not exist: %v", err)
+	}
+
+	// A lone oddly-cased name resolves as well.
+	dir2 := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir2, "Front.JPEG"), []byte("front"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got, ok = findCoverImage(dir2)
+	if !ok {
+		t.Fatal("expected to resolve Front.JPEG, got none")
+	}
+	if strings.ToLower(filepath.Base(got)) != "front.jpeg" {
+		t.Errorf("expected Front.JPEG, got %q", filepath.Base(got))
+	}
+}
+
+func TestFindCoverImageJpegAlias(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "cover.jpeg"), []byte("jpeg"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := findCoverImage(dir)
+	if !ok {
+		t.Fatal("expected to resolve cover.jpeg, got none")
+	}
+	if filepath.Base(got) != "cover.jpeg" {
+		t.Errorf("expected cover.jpeg, got %q", filepath.Base(got))
+	}
+}
+
+func TestFindCoverImageIgnoresUnsupported(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "image.webp"), []byte("webp"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "photo.bmp"), []byte("bmp"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := findCoverImage(dir); ok || got != "" {
+		t.Errorf("unsupported extensions: expected (\"\", false), got (%q, %v)", got, ok)
+	}
+
+	// A directory named cover.jpg is not a regular file and must be ignored.
+	dir2 := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir2, "cover.jpg"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := findCoverImage(dir2); ok || got != "" {
+		t.Errorf("directory named cover.jpg: expected (\"\", false), got (%q, %v)", got, ok)
+	}
+}
+
+// testEmbedCoverArtFormat exercises embedImageIntoAudio for one audio/image
+// format pair, including mode+mtime preservation and audio-lossless checks.
+func testEmbedCoverArtFormat(t *testing.T, audioExt, audioFormat, imageName string, imageColor color.Color) {
+	t.Helper()
+	requireFFmpegTools(t)
+	originalConfig := config
+	config.UseDocker = false
+	defer func() { config = originalConfig }()
+
+	dir := t.TempDir()
+	audioPath := filepath.Join(dir, "song."+audioExt)
+	generateTestAudioFile(t, audioPath, audioFormat)
+	imagePath := filepath.Join(dir, imageName)
+	writeSolidImage(t, imagePath, imageColor)
+
+	wantMode, wantMtime := stampFileForPreservationCheck(t, audioPath)
+	preCodec, preRate, preDuration := probeAudioStream(t, audioPath)
+
+	if err := embedImageIntoAudio(audioPath, imagePath); err != nil {
+		t.Fatalf("embedImageIntoAudio failed: %v", err)
+	}
+
+	assertSingleAttachedPic(t, audioPath)
+	assertModeAndTimePreserved(t, audioPath, wantMode, wantMtime)
+	assertNoEmbedTempFiles(t, dir)
+
+	postCodec, postRate, postDuration := probeAudioStream(t, audioPath)
+	if postCodec != preCodec {
+		t.Errorf("audio codec changed: %q -> %q", preCodec, postCodec)
+	}
+	if postRate != preRate {
+		t.Errorf("audio sample rate changed: %q -> %q", preRate, postRate)
+	}
+	assertDurationsClose(t, preDuration, postDuration)
+}
+
+func TestEmbedCoverArtFLAC(t *testing.T) {
+	testEmbedCoverArtFormat(t, "flac", "flac", "cover.jpg", color.RGBA{255, 0, 0, 255})
+}
+
+func TestEmbedCoverArtMP3(t *testing.T) {
+	testEmbedCoverArtFormat(t, "mp3", "mp3", "cover.jpg", color.RGBA{0, 255, 0, 255})
+}
+
+func TestEmbedCoverArtM4A(t *testing.T) {
+	testEmbedCoverArtFormat(t, "m4a", "m4a", "cover.jpg", color.RGBA{0, 0, 255, 255})
+}
+
+func TestEmbedCoverArtPNGImage(t *testing.T) {
+	testEmbedCoverArtFormat(t, "flac", "flac", "cover.png", color.RGBA{255, 255, 0, 255})
+}
+
+func TestEmbedReplacesExistingArt(t *testing.T) {
+	requireFFmpegTools(t)
+	originalConfig := config
+	config.UseDocker = false
+	defer func() { config = originalConfig }()
+
+	dir := t.TempDir()
+	audioPath := filepath.Join(dir, "song.flac")
+	generateTestAudioFile(t, audioPath, "flac")
+	imageA := filepath.Join(dir, "artA.jpg")
+	imageB := filepath.Join(dir, "artB.jpg")
+	writeSolidImage(t, imageA, color.RGBA{255, 0, 0, 255})
+	writeSolidImage(t, imageB, color.RGBA{0, 0, 255, 255})
+	wantA, err := os.ReadFile(imageA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantB, err := os.ReadFile(imageB)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := embedImageIntoAudio(audioPath, imageA); err != nil {
+		t.Fatalf("first embed failed: %v", err)
+	}
+	assertSingleAttachedPic(t, audioPath)
+	gotA := extractEmbeddedArt(t, audioPath, filepath.Join(dir, "outA.jpg"))
+	if !bytes.Equal(gotA, wantA) {
+		t.Fatal("extracted art after first embed does not match image A")
+	}
+
+	if err := embedImageIntoAudio(audioPath, imageB); err != nil {
+		t.Fatalf("second embed failed: %v", err)
+	}
+	if n, _ := attachedPicInfo(t, audioPath); n != 1 {
+		t.Fatalf("expected exactly 1 attached_pic after replacement, got %d", n)
+	}
+	gotB := extractEmbeddedArt(t, audioPath, filepath.Join(dir, "outB.jpg"))
+	if !bytes.Equal(gotB, wantB) {
+		t.Fatal("extracted art after replacement does not match image B")
+	}
+	if bytes.Equal(gotB, gotA) {
+		t.Fatal("embedded art did not change after embedding a different image")
+	}
+
+	// Idempotency: embedding the same image again keeps a single picture.
+	if err := embedImageIntoAudio(audioPath, imageB); err != nil {
+		t.Fatalf("repeat embed failed: %v", err)
+	}
+	if n, _ := attachedPicInfo(t, audioPath); n != 1 {
+		t.Fatalf("expected exactly 1 attached_pic after repeat embed, got %d", n)
+	}
+	assertNoEmbedTempFiles(t, dir)
+}
+
+func TestEmbedCoverArtFlagOff(t *testing.T) {
+	originalConfig := config
+	config.EmbedCoverArt = false
+	config.PreferHardlinks = false
+	config.UseDocker = false
+	defer func() { config = originalConfig }()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "song.flac")
+	dst := filepath.Join(dir, "out", "song.flac")
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		t.Fatal(err)
+	}
+	want := []byte("fake flac audio bytes for flag-off test")
+	if err := os.WriteFile(src, want, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cover.jpg"), []byte("fake cover"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	output, capErr := captureOutput(func() {
+		if err := copyAudioFile(src, dst); err != nil {
+			t.Errorf("copyAudioFile failed: %v", err)
+		}
+	})
+	if capErr != nil {
+		t.Fatalf("failed to capture output: %v", capErr)
+	}
+	if strings.Contains(output, "Embedding") {
+		t.Errorf("expected no embed attempt with flag off, got output %q", output)
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Error("target is not byte-identical to the source with flag off")
+	}
+	assertNoEmbedTempFiles(t, dir)
+}
+
+func TestEmbedCoverArtNoImage(t *testing.T) {
+	originalConfig := config
+	config.EmbedCoverArt = true
+	config.PreferHardlinks = false
+	config.UseDocker = false
+	defer func() { config = originalConfig }()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "song.flac")
+	dst := filepath.Join(dir, "out", "song.flac")
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		t.Fatal(err)
+	}
+	want := []byte("fake flac audio bytes for no-image test")
+	if err := os.WriteFile(src, want, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	output, capErr := captureOutput(func() {
+		if err := copyAudioFile(src, dst); err != nil {
+			t.Errorf("copyAudioFile failed: %v", err)
+		}
+	})
+	if capErr != nil {
+		t.Fatalf("failed to capture output: %v", capErr)
+	}
+	if strings.Contains(output, "Embedding") {
+		t.Errorf("expected no embed attempt without a sibling image, got output %q", output)
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Error("target content changed even though no image was embedded")
+	}
+	assertNoEmbedTempFiles(t, dir)
+}
+
+func TestEmbedSameFile(t *testing.T) {
+	originalConfig := config
+	config.EmbedCoverArt = true
+	config.PreferHardlinks = false
+	config.UseDocker = false
+	defer func() { config = originalConfig }()
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "song.flac")
+	want := []byte("fake flac audio bytes for same-file test")
+	if err := os.WriteFile(src, want, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cover.jpg"), []byte("fake cover"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	output, capErr := captureOutput(func() {
+		embedCoverArtIfRequested(src, src)
+	})
+	if capErr != nil {
+		t.Fatalf("failed to capture output: %v", capErr)
+	}
+	if strings.Contains(output, "Embedding") || strings.Contains(output, "Warning") {
+		t.Errorf("expected silent no-op for identical src/dst, got output %q", output)
+	}
+	got, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Error("source file changed after same-file embed call")
+	}
+	assertNoEmbedTempFiles(t, dir)
+}
+
+func TestEmbedCorruptImage(t *testing.T) {
+	requireFFmpegTools(t)
+	originalConfig := config
+	config.EmbedCoverArt = true
+	config.PreferHardlinks = false
+	config.UseDocker = false
+	defer func() { config = originalConfig }()
+
+	dir := t.TempDir()
+	srcDir := filepath.Join(dir, "src")
+	dstDir := filepath.Join(dir, "dst")
+	if err := os.MkdirAll(srcDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dstDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(srcDir, "song.flac")
+	dst := filepath.Join(dstDir, "song.flac")
+	generateTestAudioFile(t, src, "flac")
+	if err := os.WriteFile(filepath.Join(srcDir, "cover.jpg"), []byte("this is not a valid jpeg image"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	wantHash := sha256OfFile(t, src)
+
+	output, capErr := captureOutput(func() {
+		if err := copyAudioFile(src, dst); err != nil {
+			t.Errorf("copyAudioFile failed: %v", err)
+		}
+	})
+	if capErr != nil {
+		t.Fatalf("failed to capture output: %v", capErr)
+	}
+	if !strings.Contains(output, "Warning: Failed to embed") {
+		t.Errorf("expected embed failure warning, got output %q", output)
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("copied audio missing after failed embed: %v", err)
+	}
+	want, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Error("copied audio was not preserved byte-identical after failed embed")
+	}
+	if sha256OfFile(t, src) != wantHash {
+		t.Error("source file changed after failed embed")
+	}
+	assertNoEmbedTempFiles(t, dir)
+}
+
+func TestEmbedUnsupportedTarget(t *testing.T) {
+	dir := t.TempDir()
+	txt := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(txt, []byte("plain text"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	img := filepath.Join(dir, "cover.jpg")
+	writeSolidImage(t, img, color.RGBA{255, 0, 0, 255})
+	if err := embedImageIntoAudio(txt, img); err == nil {
+		t.Error("expected error embedding into unsupported .txt target, got nil")
+	}
+	assertNoEmbedTempFiles(t, dir)
+}
+
+func TestEmbedWithPreferHardlinks(t *testing.T) {
+	requireFFmpegTools(t)
+	originalConfig := config
+	config.PreferHardlinks = true
+	config.EmbedCoverArt = true
+	config.UseDocker = false
+	defer func() { config = originalConfig }()
+
+	t.Run("WithCoverImage", func(t *testing.T) {
+		// copyFile hardlinks src->dst first; embedCoverArtIfRequested then
+		// embeds via temp file + rename, which breaks the link so the
+		// source inode is never mutated.
+		root := t.TempDir()
+		src := filepath.Join(root, "src", "song.flac")
+		dst := filepath.Join(root, "dst", "song.flac")
+		if err := os.MkdirAll(filepath.Dir(src), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+			t.Fatal(err)
+		}
+		generateTestAudioFile(t, src, "flac")
+		writeSolidImage(t, filepath.Join(filepath.Dir(src), "cover.jpg"), color.RGBA{255, 0, 0, 255})
+		wantHash := sha256OfFile(t, src)
+
+		output, capErr := captureOutput(func() {
+			if err := copyAudioFile(src, dst); err != nil {
+				t.Errorf("copyAudioFile failed: %v", err)
+			}
+		})
+		if capErr != nil {
+			t.Fatalf("failed to capture output: %v", capErr)
+		}
+		if !strings.Contains(output, "Embedding cover art") {
+			t.Errorf("expected embed to run for hardlinked copy, got output %q", output)
+		}
+
+		srcInfo, err := os.Stat(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dstInfo, err := os.Stat(dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if os.SameFile(srcInfo, dstInfo) {
+			t.Error("expected embed to break the hardlink so src and dst differ")
+		}
+		if sha256OfFile(t, src) != wantHash {
+			t.Error("source bytes changed after copying")
+		}
+		assertSingleAttachedPic(t, dst)
+		assertNoEmbedTempFiles(t, root)
+	})
+
+	t.Run("WithoutCoverImage", func(t *testing.T) {
+		root := t.TempDir()
+		src := filepath.Join(root, "src", "song.flac")
+		dst := filepath.Join(root, "dst", "song.flac")
+		if err := os.MkdirAll(filepath.Dir(src), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+			t.Fatal(err)
+		}
+		generateTestAudioFile(t, src, "flac")
+
+		if err := copyAudioFile(src, dst); err != nil {
+			t.Fatalf("copyAudioFile failed: %v", err)
+		}
+		srcInfo, err := os.Stat(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dstInfo, err := os.Stat(dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !os.SameFile(srcInfo, dstInfo) {
+			t.Error("expected no-image copy to stay hardlinked, but src and dst differ")
+		}
+	})
+}
+
+func TestCopyImageFilesNeverEmbeds(t *testing.T) {
+	originalConfig := config
+	config.EmbedCoverArt = true
+	config.CopyImages = true
+	config.PreferHardlinks = false
+	config.UseDocker = false
+	defer func() { config = originalConfig }()
+
+	root := t.TempDir()
+	srcDir := filepath.Join(root, "src")
+	dstDir := filepath.Join(root, "dst")
+	if err := os.MkdirAll(srcDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	config.SourceDir = srcDir
+	config.TargetDir = dstDir
+
+	cover := []byte("fake cover image bytes")
+	if err := os.WriteFile(filepath.Join(srcDir, "cover.jpg"), cover, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "song.mp3"), []byte("fake mp3 bytes"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	output, capErr := captureOutput(func() {
+		if err := copyImageFiles(); err != nil {
+			t.Errorf("copyImageFiles failed: %v", err)
+		}
+	})
+	if capErr != nil {
+		t.Fatalf("failed to capture output: %v", capErr)
+	}
+	if strings.Contains(output, "Embedding") {
+		t.Errorf("copyImageFiles must never embed cover art, got output %q", output)
+	}
+	got, err := os.ReadFile(filepath.Join(dstDir, "cover.jpg"))
+	if err != nil {
+		t.Fatalf("cover.jpg was not copied: %v", err)
+	}
+	if !bytes.Equal(got, cover) {
+		t.Error("copied image bytes differ from the source")
+	}
+}
+
+func TestCopyAudioFileBranchCoverage(t *testing.T) {
+	requireFFmpegTools(t)
+	originalConfig := config
+	defer func() { config = originalConfig }()
+	config.UseDocker = false
+	config.EnforceOutputFormat = ""
+	config.PreferHardlinks = false
+	config.EmbedCoverArt = true
+
+	// MP3 passthrough through processAudioFiles: MP3s are copied without
+	// probing (no sox needed) and the sibling cover must be embedded.
+	t.Run("MP3Passthrough", func(t *testing.T) {
+		root := t.TempDir()
+		srcDir := filepath.Join(root, "src")
+		dstDir := filepath.Join(root, "dst")
+		if err := os.MkdirAll(srcDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		generateTestAudioFile(t, filepath.Join(srcDir, "song.mp3"), "mp3")
+		writeSolidImage(t, filepath.Join(srcDir, "cover.jpg"), color.RGBA{255, 0, 0, 255})
+		config.SourceDir = srcDir
+		config.TargetDir = dstDir
+
+		var procErr error
+		_, capErr := captureOutput(func() {
+			procErr = processAudioFiles()
+		})
+		if capErr != nil {
+			t.Fatalf("failed to capture output: %v", capErr)
+		}
+		if procErr != nil {
+			t.Fatalf("processAudioFiles failed: %v", procErr)
+		}
+		assertSingleAttachedPic(t, filepath.Join(dstDir, "song.mp3"))
+		assertNoEmbedTempFiles(t, root)
+	})
+
+	// Direct copyAudioFile coverage for the remaining embeddable formats.
+	for _, tc := range []struct{ ext, format string }{
+		{"flac", "flac"},
+		{"m4a", "m4a"},
+	} {
+		t.Run("DirectCopy"+tc.ext, func(t *testing.T) {
+			root := t.TempDir()
+			src := filepath.Join(root, "src", "song."+tc.ext)
+			dst := filepath.Join(root, "dst", "song."+tc.ext)
+			if err := os.MkdirAll(filepath.Dir(src), 0755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+				t.Fatal(err)
+			}
+			generateTestAudioFile(t, src, tc.format)
+			writeSolidImage(t, filepath.Join(filepath.Dir(src), "cover.jpg"), color.RGBA{0, 255, 0, 255})
+
+			var copyErr error
+			_, capErr := captureOutput(func() {
+				copyErr = copyAudioFile(src, dst)
+			})
+			if capErr != nil {
+				t.Fatalf("failed to capture output: %v", capErr)
+			}
+			if copyErr != nil {
+				t.Fatalf("copyAudioFile failed: %v", copyErr)
+			}
+			assertSingleAttachedPic(t, dst)
+			assertNoEmbedTempFiles(t, root)
+		})
 	}
 }

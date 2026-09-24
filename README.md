@@ -26,6 +26,7 @@ Lilt stands for "lightweight intelligent lossless transcoder". It is also a form
 - 🎶 Copies MP3 files without modification (unless format enforcement is enabled)
 - 🖼️ Optional: Copies JPG and PNG images from the source directory
 - 🔗 Optional: Creates filesystem hardlinks instead of copies for unchanged files with `--prefer-hardlinks`
+- 🎨 Optional: Embeds folder cover image (cover/front/folder.jpg/png) as cover art into copied audio files with `--embed-cover-art`
 - 🐳 Docker support for containerized execution
 - 💻 Cross-platform: Windows, macOS, Linux (x64, ARM64, x86, ARM)
 
@@ -106,6 +107,7 @@ lilt <source_directory> [options]
 --no-preserve-metadata          Do not preserve ID3 tags and cover art using FFmpeg (default: false)
 --enforce-output-format <fmt>   Enforce output format for all files: flac, mp3, or alac
 --prefer-hardlinks              Prefer filesystem hardlinks over copying for files that do not need transcoding
+--embed-cover-art               Embed folder cover image (cover/front/folder.jpg/png) as cover art into copied audio files (replaces existing embedded art)
 --use-docker                    Use Docker to run Sox instead of local installation
 --docker-image <img>            Specify Docker image (default: ardakilic/sox_ng:latest)
 --self-update                   Check for updates and self-update if newer version available
@@ -168,6 +170,18 @@ lilt.exe "C:\Music\MyAlbum" --target-dir "C:\Music\MyAlbum-16bit" --prefer-hardl
 
 > **Note:** Hardlinks share inode data. Any in-place modification to the source or target file will affect both paths.
 
+### Embedding Cover Art
+
+When a folder contains a cover image (`cover`, `front`, or `folder` with a `.jpg`/`.jpeg`/`.png` extension), you can use `--embed-cover-art` to embed it as cover art into copied audio files (FLAC `PICTURE`, MP3 ID3v2.3 `APIC`, M4A `covr`), replacing any existing embedded art. Transcoded files are unaffected, and `--copy-images` is not required. See [docs/embed-cover-art.md](docs/embed-cover-art.md) for the priority order, per-format details, and flag interactions.
+
+```bash
+# Windows
+lilt.exe "C:\Music\MyAlbum" --target-dir "C:\Music\MyAlbum-16bit" --embed-cover-art
+
+# macOS/Linux
+./lilt ~/Music/MyAlbum --target-dir ~/Music/MyAlbum-16bit --embed-cover-art
+```
+
 ## Docker Support
 
 When using the `--use-docker` option:
@@ -205,7 +219,8 @@ Alternative Docker images you can use:
 5. MP3 files are copied without modification
 6. If `--copy-images` is enabled, `.jpg` and `.png` files are copied to the target directory
 7. If `--prefer-hardlinks` is enabled, files that do not need transcoding are created as filesystem hardlinks when possible; otherwise, they are copied as usual
-8. The original folder structure is preserved in the target directory
+8. If `--embed-cover-art` is enabled, the folder cover image (cover/front/folder.jpg/png, first match wins) is embedded as cover art into copied audio files, replacing existing embedded art (see [docs/embed-cover-art.md](docs/embed-cover-art.md))
+9. The original folder structure is preserved in the target directory
 
 ### Format Enforcement Mode (with --enforce-output-format)
 
