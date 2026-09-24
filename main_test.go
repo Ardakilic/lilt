@@ -6732,6 +6732,10 @@ func TestProcessAudioFilesALACConversionFallbackKeepsM4A(t *testing.T) {
 	}
 	// Correct extension also routes embedding through the M4A template.
 	assertSingleAttachedPic(t, filepath.Join(dstDir, "song.m4a"))
+	// And the fallback file holds the original ALAC audio, not FLAC data.
+	if codec, _, _ := probeAudioStream(t, filepath.Join(dstDir, "song.m4a")); codec != "alac" {
+		t.Errorf("expected fallback song.m4a to contain alac audio, got %q", codec)
+	}
 	assertNoEmbedTempFiles(t, root)
 }
 
