@@ -4184,6 +4184,12 @@ func TestGetAudioInfoALAC(t *testing.T) {
 	// Set up test config
 	config.SourceDir = tmpDir
 	config.TargetDir = tmpDir
+	config.UseDocker = false
+	config.SoxCommand = "sox"
+
+	// Hide external tools so the missing-tool errors below are
+	// deterministic on machines with ffmpeg/sox installed.
+	t.Setenv("PATH", t.TempDir())
 
 	// Note: These will fail because we don't have actual audio files
 	// but we can test that the right functions are called
@@ -4282,6 +4288,8 @@ func TestProcessALAC(t *testing.T) {
 		config.NoPreserveMetadata = true
 		config.SourceDir = tmpDir
 		config.TargetDir = tmpDir
+		// Hide ffmpeg so the missing-tool error is deterministic.
+		t.Setenv("PATH", t.TempDir())
 
 		// Should fail because ffmpeg is not available, but we can test the path
 		err := processALAC(sourcePath, targetPath, false, []string{}, []string{})
@@ -4298,6 +4306,8 @@ func TestProcessALAC(t *testing.T) {
 		config.NoPreserveMetadata = false
 		config.SourceDir = tmpDir
 		config.TargetDir = tmpDir
+		// Hide ffmpeg so the missing-tool error is deterministic.
+		t.Setenv("PATH", t.TempDir())
 
 		// Should fail because ffmpeg is not available
 		err := processALAC(sourcePath, targetPath, true, []string{"-b", "16"}, []string{"rate", "-v", "-L", "48000"})
@@ -4403,6 +4413,9 @@ func TestGetALACInfoError(t *testing.T) {
 
 	t.Run("LocalModeFFmpegMissing", func(t *testing.T) {
 		config.UseDocker = false
+		// Hide ffprobe so the missing-tool error is deterministic on
+		// machines with FFmpeg installed.
+		t.Setenv("PATH", t.TempDir())
 
 		// This should fail because ffprobe/ffmpeg is not available
 		_, err := getALACInfo(alacFile)
@@ -4781,16 +4794,25 @@ func TestSetupSoxCommandEdgeCases(t *testing.T) {
 			t.Fatal(err)
 		}
 
+		// Use this test binary as the sox stand-in: a path containing a
+		// separator bypasses PATH lookup, while the emptied PATH below
+		// hides ffmpeg deterministically.
+		soxStandIn, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", t.TempDir())
+
 		config = Config{
 			UseDocker:          false,
 			SourceDir:          sourceDir,
 			TargetDir:          tmpDir,
-			SoxCommand:         "true", // Mock sox as available
-			NoPreserveMetadata: true,   // Metadata preservation disabled
+			SoxCommand:         soxStandIn, // Mock sox as available
+			NoPreserveMetadata: true,       // Metadata preservation disabled
 		}
 
 		// Should still require FFmpeg because ALAC files are present
-		err := setupSoxCommand()
+		err = setupSoxCommand()
 		if err == nil {
 			t.Error("Expected FFmpeg requirement error when ALAC files are present")
 		}
